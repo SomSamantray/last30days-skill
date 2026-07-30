@@ -1562,24 +1562,39 @@ def render_comparison_multi_context(
 
 
 _SAFE_MARKDOWN_LINK_SCHEMES = ("http://", "https://")
+_MARKDOWN_LINK_UNSAFE_CHARS = ("(", ")", "[", "]", "\\")
+
+
+def _sanitize_url_for_single_line_output(url: str) -> str:
+    """Collapse embedded newlines/carriage-returns out of an untrusted URL.
+
+    A URL is not supposed to contain raw line breaks; a source-controlled
+    value that does could otherwise inject fabricated report structure
+    (fake headings, list items) into the saved single-line output --
+    whether or not it ends up wrapped in markdown link syntax. Applied
+    before either the link-safety check or the plain-text fallback below,
+    so this closes the injection at the root rather than only for links.
+    """
+    return re.sub(r"[\r\n]+", " ", url).strip()
 
 
 def _markdown_url_link(url: str) -> str:
     """Render ``url`` as a markdown link when it's safe to, else as plain text.
 
-    Source URLs are untrusted API responses, not authored content -- a `)` in
-    the URL would prematurely close the markdown link destination and corrupt
-    the rest of the line, and an unrestricted scheme (e.g. ``javascript:``)
-    would become an active link with none of the safety filtering
-    ``html_render.py`` already applies via ``html.escape(url, quote=True)``.
-    Falls back to the bare URL string (not a link) rather than guessing at an
-    escaping scheme for markdown link syntax specifically.
+    Source URLs are untrusted API responses, not authored content: `(`/`)`/
+    `[`/`]` would corrupt markdown link syntax, a backslash can escape
+    adjacent markdown delimiters, and an unrestricted scheme (e.g.
+    ``javascript:``) would become an active link with none of the safety
+    filtering ``html_render.py`` already applies via
+    ``html.escape(url, quote=True)``. Falls back to the bare (sanitized) URL
+    string rather than guessing at an escaping scheme for markdown syntax.
     """
     if not url:
         return ""
+    url = _sanitize_url_for_single_line_output(url)
     if not url.startswith(_SAFE_MARKDOWN_LINK_SCHEMES):
         return url
-    if "(" in url or ")" in url or "[" in url or "]" in url:
+    if any(ch in url for ch in _MARKDOWN_LINK_UNSAFE_CHARS):
         return url
     return f"[{url}]({url})"
 

@@ -1559,6 +1559,24 @@ class TestMarkdownUrlLinkSafety(unittest.TestCase):
         url = "javascript:alert(1)"
         self.assertEqual(render._markdown_url_link(url), url)
 
+    def test_url_with_backslash_falls_back_to_plain_text(self):
+        # A backslash can escape adjacent markdown delimiters.
+        url = "https://example.com/\\]"
+        result = render._markdown_url_link(url)
+        self.assertNotIn("](", result)
+
+    def test_embedded_newline_is_stripped_even_from_plain_text_fallback(self):
+        """Greptile follow-up: an embedded newline/CR must not survive into
+        the rendered line at all -- whether or not the URL becomes a link --
+        since it could otherwise inject fabricated report structure (fake
+        headings, list items) into the single-line output."""
+        url = "https://example.com/x\n## Injected Heading\nmore"
+        result = render._markdown_url_link(url)
+        self.assertNotIn("\n", result)
+        url_cr = "https://example.com/x\r\nmore"
+        self.assertNotIn("\r", render._markdown_url_link(url_cr))
+        self.assertNotIn("\n", render._markdown_url_link(url_cr))
+
     def test_empty_url_returns_empty_string(self):
         self.assertEqual(render._markdown_url_link(""), "")
 
