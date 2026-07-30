@@ -165,3 +165,57 @@ def test_run_cli_bad_json_returns_error(monkeypatch):
     monkeypatch.setattr(arxiv.subproc, "run_with_timeout", lambda cmd, timeout: _Proc(0, "not json"))
     resp = arxiv.search_arxiv("topic", "2026-06-01", "2026-06-27")
     assert resp["results"] == [] and "error" in resp
+
+
+# ---- unquoted-retry on zero results (#908) ----
+
+def test_zero_result_quoted_query_retries_unquoted_and_finds_results(monkeypatch):
+    """A natural-language multi-word topic matches nothing as an exact
+    phrase, but the unquoted retry finds it -- the fix for #908."""
+    monkeypatch.setattr(arxiv, "_is_available", lambda: True)
+    calls = []
+
+    def fake_run(cmd, timeout):
+        calls.append(cmd)
+        query = cmd[cmd.index("--search-query") + 1]
+        if query.startswith('all:"'):
+            return _Proc(0, '{"results":{"entries":[]}}')
+        return _Proc(0, '{"results":{"entries":[{"title":"AI video generation advances"}]}}')
+
+    monkeypatch.setattr(arxiv.subproc, "run_with_timeout", fake_run)
+    resp = arxiv.search_arxiv("AI video generation advances", "2026-06-01", "2026-06-27")
+    assert resp["results"] == [{"title": "AI video generation advances"}]
+    assert len(calls) == 2
+    assert 'all:"AI video generation advances"' in calls[0]
+    assert "all:AI video generation advances" in calls[1]
+
+
+def test_zero_result_quoted_query_retry_also_empty_returns_empty(monkeypatch):
+    monkeypatch.setattr(arxiv, "_is_available", lambda: True)
+    calls = []
+
+    def fake_run(cmd, timeout):
+        calls.append(cmd)
+        return _Proc(0, '{"results":{"entries":[]}}')
+
+    monkeypatch.setattr(arxiv.subproc, "run_with_timeout", fake_run)
+    resp = arxiv.search_arxiv("truly obscure nonsense topic", "2026-06-01", "2026-06-27")
+    assert resp["results"] == []
+    assert "error" not in resp
+    assert len(calls) == 2
+
+
+def test_real_cli_error_does_not_trigger_unquoted_retry(monkeypatch):
+    """A genuine failure (nonzero exit) must not retry -- only a clean
+    zero-result success should (R6)."""
+    monkeypatch.setattr(arxiv, "_is_available", lambda: True)
+    calls = []
+
+    def fake_run(cmd, timeout):
+        calls.append(cmd)
+        return _Proc(1, "", "boom")
+
+    monkeypatch.setattr(arxiv.subproc, "run_with_timeout", fake_run)
+    resp = arxiv.search_arxiv("topic", "2026-06-01", "2026-06-27")
+    assert resp["results"] == [] and "boom" in resp["error"]
+    assert len(calls) == 1

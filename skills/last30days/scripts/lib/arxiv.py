@@ -61,13 +61,19 @@ def _today() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _build_search_query(topic: str) -> str:
-    """Quote the topic so arXiv treats it as a phrase across all fields.
+def _build_search_query(topic: str, *, quoted: bool = True) -> str:
+    """Build the arXiv search-query string for ``topic``.
 
-    Inner double-quotes are stripped (arXiv has no phrase-escaping); the outer
-    quotes plus ``all:`` give a phrase-scoped relevance search.
+    Quoted (default): phrase-scoped exact match across all fields. Precise
+    for topics that genuinely appear as a phrase in a title/abstract, but a
+    natural-language multi-word topic ("AI video generation advances") almost
+    never appears verbatim, so it returns zero results (#908). Unquoted:
+    plain term matching, used as a fallback retry -- see ``search_arxiv``.
+
+    Inner double-quotes are stripped (arXiv has no phrase-escaping) either way.
     """
-    return f'all:"{_clean_phrase(topic)}"'
+    phrase = _clean_phrase(topic)
+    return f'all:"{phrase}"' if quoted else f"all:{phrase}"
 
 
 def _clean_phrase(topic: str) -> str:
@@ -75,12 +81,12 @@ def _clean_phrase(topic: str) -> str:
     return " ".join(topic.replace('"', " ").split())
 
 
-def _build_search_args(topic: str, limit: int) -> List[str]:
+def _build_search_args(topic: str, limit: int, *, quoted: bool = True) -> List[str]:
     return [
         CLI_BIN,
         "query",
         "--search-query",
-        _build_search_query(topic),
+        _build_search_query(topic, quoted=quoted),
         "--sort-by",
         "relevance",
         "--max-results",
@@ -172,6 +178,15 @@ def search_arxiv(
     _log(f"query '{topic}' (relevance, max={limit})")
     response = _run_cli(cmd, timeout=SEARCH_TIMEOUT)
     _log(f"found {len(response.get('results') or [])} entries")
+    # A genuine zero-result quoted-phrase match (no error) is expected for any
+    # natural-language multi-word topic -- the phrase rarely appears verbatim
+    # in a title/abstract (#908). Retry once, unquoted, before giving up; a
+    # real failure (CLI error, timeout, missing binary) skips the retry.
+    if not response.get("error") and not response.get("results"):
+        retry_cmd = _build_search_args(topic, limit, quoted=False)
+        _log(f"quoted phrase matched nothing; retrying unquoted for '{topic}'")
+        response = _run_cli(retry_cmd, timeout=SEARCH_TIMEOUT)
+        _log(f"unquoted retry found {len(response.get('results') or [])} entries")
     return response
 
 
