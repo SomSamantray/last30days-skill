@@ -1634,7 +1634,7 @@ def render_full(report: schema.Report) -> str:
             lines.append(f"**{item.item_id}** (score:{score:.0f}) {item.author or ''} ({item.published_at or 'date unknown'}) [{_format_item_engagement(item)}]")
             lines.append(f"  {item.title}")
             if item.url:
-                lines.append(f"  {item.url}")
+                lines.append(f"  [{item.url}]({item.url})")
             if item.container:
                 lines.append(f"  *{item.container}*")
             if item.snippet:
@@ -2063,8 +2063,9 @@ def _render_candidate(
         f"{prefix} [{schema.candidate_source_label(candidate)}] {candidate.title}"
         + (_candidate_freshness_flag(report, candidate.candidate_id) if report else ""),
         f"   - {details}",
-        f"   - URL: {candidate.url}",
     ]
+    if candidate.url:
+        lines.append(f"   - URL: [{candidate.url}]({candidate.url})")
     corroboration = _format_corroboration(candidate)
     if corroboration:
         lines.append(f"   - {corroboration}")

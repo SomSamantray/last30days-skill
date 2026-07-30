@@ -1530,3 +1530,61 @@ class TestPolymarketTopMarkets(unittest.TestCase):
         item = self._pm_item("Who wins the primary?", "Kanye", 0.12)
         line = render._polymarket_top_markets([item])[0]
         self.assertIn(": Kanye ", line)
+
+
+class TestSourceUrlsAreClickable(unittest.TestCase):
+    """Regression for #886: source URLs rendered as plain text instead of
+    markdown links in the saved raw report and internal evidence block."""
+
+    def test_all_items_by_source_url_is_markdown_link(self):
+        text = render.render_full(sample_report())
+        self.assertIn("[https://example.com](https://example.com)", text)
+        # No bare unlinked URL line remains for the item that has one.
+        self.assertNotIn("\n  https://example.com\n", text)
+
+    def test_all_items_by_source_empty_url_renders_no_url_line(self):
+        report = sample_report()
+        empty_url_item = schema.SourceItem(
+            item_id="i3",
+            source="perplexity",
+            title="Perplexity Sonar Pro: test topic",
+            body="AI synthesis body.",
+            url="",
+            container="perplexity.ai",
+            published_at="2026-03-16",
+            date_confidence="high",
+            engagement={"citations": 3},
+            metadata={},
+        )
+        report.items_by_source["perplexity"] = [empty_url_item]
+        text = render.render_full(report)
+        self.assertNotIn("[]()", text)
+
+    def test_render_candidate_url_is_markdown_link(self):
+        candidate = schema.Candidate(
+            candidate_id="c1", item_id="i1", source="reddit",
+            title="Grounded result", url="https://example.com/thread",
+            snippet="A snippet.", subquery_labels=["primary"],
+            native_ranks={"reddit": 1}, local_relevance=1.0, freshness=1,
+            engagement=100, source_quality=1.0, rrf_score=1.0,
+            sources=["reddit"], source_items=[],
+        )
+        text = "\n".join(render._render_candidate(candidate, "1."))
+        self.assertIn(
+            "URL: [https://example.com/thread](https://example.com/thread)", text
+        )
+
+    def test_render_candidate_empty_url_renders_no_url_line(self):
+        """Regression: unlike the item-loop location, _render_candidate had
+        no guard at all -- an empty candidate.url produced a broken `[]()`."""
+        candidate = schema.Candidate(
+            candidate_id="c1", item_id="i1", source="perplexity",
+            title="Grounded result", url="",
+            snippet="A snippet.", subquery_labels=["primary"],
+            native_ranks={"perplexity": 1}, local_relevance=1.0, freshness=1,
+            engagement=100, source_quality=1.0, rrf_score=1.0,
+            sources=["perplexity"], source_items=[],
+        )
+        text = "\n".join(render._render_candidate(candidate, "1."))
+        self.assertNotIn("[]()", text)
+        self.assertNotIn("URL:", text)
