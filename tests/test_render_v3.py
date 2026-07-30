@@ -1547,23 +1547,33 @@ class TestMarkdownUrlLinkSafety(unittest.TestCase):
     def test_url_with_closing_paren_falls_back_to_plain_text(self):
         # A `)` in the URL would prematurely close the markdown destination.
         url = "https://example.com/wiki/Foo_(bar)"
-        self.assertEqual(render._markdown_url_link(url), url)
-        self.assertNotIn("](", render._markdown_url_link(url))
+        result = render._markdown_url_link(url)
+        self.assertNotEqual(result, url)
+        self.assertNotIn("](", result)
+        self.assertIn(r"\(bar\)", result)
 
     def test_url_with_bracket_falls_back_to_plain_text(self):
         url = "https://example.com/search?q=[test]"
-        self.assertEqual(render._markdown_url_link(url), url)
+        result = render._markdown_url_link(url)
+        self.assertNotEqual(result, url)
+        self.assertNotIn("](", result)
+        self.assertIn(r"\[test\]", result)
 
     def test_non_http_scheme_falls_back_to_plain_text(self):
         # Untrusted scheme (e.g. javascript:) must never become an active link.
         url = "javascript:alert(1)"
-        self.assertEqual(render._markdown_url_link(url), url)
+        result = render._markdown_url_link(url)
+        self.assertNotEqual(result, url)
+        self.assertNotIn("](", result)
+        self.assertIn(r"javascript\:alert\(1\)", result)
 
     def test_url_with_backslash_falls_back_to_plain_text(self):
         # A backslash can escape adjacent markdown delimiters.
         url = "https://example.com/\\]"
         result = render._markdown_url_link(url)
+        self.assertNotEqual(result, url)
         self.assertNotIn("](", result)
+        self.assertIn(r"\\\]", result)
 
     def test_embedded_newline_is_stripped_even_from_plain_text_fallback(self):
         """Greptile follow-up: an embedded newline/CR must not survive into
@@ -1576,9 +1586,43 @@ class TestMarkdownUrlLinkSafety(unittest.TestCase):
         url_cr = "https://example.com/x\r\nmore"
         self.assertNotIn("\r", render._markdown_url_link(url_cr))
         self.assertNotIn("\n", render._markdown_url_link(url_cr))
+        self.assertNotIn("##", result)
+        self.assertNotEqual(result, url)
+
+    def test_url_with_controls_is_escaped_and_single_line(self):
+        url = "https://example.com/x\t\x00\u2028more"
+        result = render._markdown_url_link(url)
+        self.assertNotEqual(result, url)
+        self.assertNotIn("\t", result)
+        self.assertNotIn("\x00", result)
+        self.assertNotIn("](", result)
+
+    def test_safe_url_with_query_fragment_and_encoded_delimiters_stays_clickable(self):
+        url = "https://example.com/search?q=one&other=two%28x%29#result"
+        self.assertEqual(
+            render._markdown_url_link(url),
+            f"[{url}]({url})",
+        )
+
+    def test_malformed_or_unsafe_destinations_are_escaped(self):
+        for url in (
+            "data:text/plain,hello",
+            "vbscript:alert(1)",
+            "file:///tmp/report.md",
+            "mailto:user@example.com",
+            "//evil.example/path",
+            "https:example.com/path",
+            " https://example.com/path ",
+        ):
+            with self.subTest(url=url):
+                result = render._markdown_url_link(url)
+                self.assertNotEqual(result, url)
+                self.assertNotIn("](", result)
 
     def test_empty_url_returns_empty_string(self):
         self.assertEqual(render._markdown_url_link(""), "")
+        self.assertEqual(render._markdown_url_link(" \t\r\n"), "")
+        self.assertEqual(render._markdown_url_link("\x00\u2028"), "")
 
 
 class TestSourceUrlsAreClickable(unittest.TestCase):
@@ -1609,6 +1653,32 @@ class TestSourceUrlsAreClickable(unittest.TestCase):
         text = render.render_full(report)
         self.assertNotIn("[]()", text)
 
+    def test_all_items_by_source_whitespace_url_renders_no_url_line(self):
+        report = sample_report()
+        report.items_by_source["grounding"][0].url = " \t\r\n"
+        text = render.render_full(report)
+        all_items = text.split("## All Items by Source", 1)[1]
+        self.assertNotIn("URL:", all_items)
+        self.assertNotIn("[]()", all_items)
+
+    def test_all_items_by_source_unsafe_url_is_escaped(self):
+        report = sample_report()
+        report.items_by_source["grounding"][0].url = "https://example.test/[click](javascript:alert(1))"
+        text = render.render_full(report)
+        all_items = text.split("## All Items by Source", 1)[1]
+        url_lines = [line for line in all_items.splitlines() if "click" in line]
+        self.assertEqual(len(url_lines), 1)
+        self.assertNotIn("](", url_lines[0])
+        self.assertIn(r"\[click\]\(javascript\:alert\(1\)\)", url_lines[0])
+
+    def test_all_items_by_source_newline_url_cannot_create_structure(self):
+        report = sample_report()
+        report.items_by_source["grounding"][0].url = "https://example.test/x\n## forged heading\n- forged item"
+        text = render.render_full(report)
+        self.assertNotIn("\n## forged heading", text)
+        self.assertNotIn("\n- forged item", text)
+        self.assertNotIn("\n  https://example.test/x", text)
+
     def test_render_candidate_url_is_markdown_link(self):
         candidate = schema.Candidate(
             candidate_id="c1", item_id="i1", source="reddit",
@@ -1637,3 +1707,42 @@ class TestSourceUrlsAreClickable(unittest.TestCase):
         text = "\n".join(render._render_candidate(candidate, "1."))
         self.assertNotIn("[]()", text)
         self.assertNotIn("URL:", text)
+
+    def test_render_candidate_whitespace_url_renders_no_url_line(self):
+        candidate = schema.Candidate(
+            candidate_id="c1", item_id="i1", source="perplexity",
+            title="Grounded result", url=" \t\r\n",
+            snippet="A snippet.", subquery_labels=["primary"],
+            native_ranks={"perplexity": 1}, local_relevance=1.0, freshness=1,
+            engagement=100, source_quality=1.0, rrf_score=1.0,
+            sources=["perplexity"], source_items=[],
+        )
+        text = "\n".join(render._render_candidate(candidate, "1."))
+        self.assertNotIn("URL:", text)
+        self.assertNotIn("[]()", text)
+
+    def test_render_candidate_unsafe_url_is_escaped(self):
+        candidate = schema.Candidate(
+            candidate_id="c1", item_id="i1", source="perplexity",
+            title="Grounded result", url="javascript:alert(1)",
+            snippet="A snippet.", subquery_labels=["primary"],
+            native_ranks={"perplexity": 1}, local_relevance=1.0, freshness=1,
+            engagement=100, source_quality=1.0, rrf_score=1.0,
+            sources=["perplexity"], source_items=[],
+        )
+        text = "\n".join(render._render_candidate(candidate, "1."))
+        self.assertIn(r"URL: javascript\:alert\(1\)", text)
+        self.assertNotIn("](", text)
+
+    def test_render_candidate_newline_url_cannot_create_structure(self):
+        candidate = schema.Candidate(
+            candidate_id="c1", item_id="i1", source="perplexity",
+            title="Grounded result", url="https://example.test/x\n## forged heading",
+            snippet="A snippet.", subquery_labels=["primary"],
+            native_ranks={"perplexity": 1}, local_relevance=1.0, freshness=1,
+            engagement=100, source_quality=1.0, rrf_score=1.0,
+            sources=["perplexity"], source_items=[],
+        )
+        text = "\n".join(render._render_candidate(candidate, "1."))
+        self.assertNotIn("\n## forged heading", text)
+        self.assertNotIn("URL: [", text)

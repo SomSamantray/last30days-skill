@@ -1561,8 +1561,9 @@ def render_comparison_multi_context(
     return "\n".join(lines).strip() + "\n"
 
 
-_SAFE_MARKDOWN_LINK_SCHEMES = ("http://", "https://")
-_MARKDOWN_LINK_UNSAFE_CHARS = ("(", ")", "[", "]", "\\")
+_SAFE_MARKDOWN_LINK_SCHEMES = ("http", "https")
+_MARKDOWN_LINK_UNSAFE_CHARS = ("(", ")", "[", "]", "\\", "<", ">", "`")
+_MARKDOWN_ESCAPE_CHARS = frozenset(r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''')
 
 
 def _sanitize_url_for_single_line_output(url: str) -> str:
@@ -1575,28 +1576,59 @@ def _sanitize_url_for_single_line_output(url: str) -> str:
     before either the link-safety check or the plain-text fallback below,
     so this closes the injection at the root rather than only for links.
     """
-    return re.sub(r"[\r\n]+", " ", url).strip()
+    return "".join(
+        " "
+        if ch.isspace() or ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F
+        else ch
+        for ch in url
+    )
+
+
+def _escape_markdown_text(text: str) -> str:
+    """Escape ASCII punctuation so untrusted text stays inert in Markdown."""
+    return "".join(
+        f"\\{ch}" if ch in _MARKDOWN_ESCAPE_CHARS else ch
+        for ch in text
+    )
 
 
 def _markdown_url_link(url: str) -> str:
-    """Render ``url`` as a markdown link when it's safe to, else as plain text.
+    """Render ``url`` as a markdown link when it's safe to, else escaped text.
 
     Source URLs are untrusted API responses, not authored content: `(`/`)`/
     `[`/`]` would corrupt markdown link syntax, a backslash can escape
     adjacent markdown delimiters, and an unrestricted scheme (e.g.
-    ``javascript:``) would become an active link with none of the safety
-    filtering ``html_render.py`` already applies via
-    ``html.escape(url, quote=True)``. Falls back to the bare (sanitized) URL
-    string rather than guessing at an escaping scheme for markdown syntax.
+    ``javascript:``) would become an active link. Unsafe values are escaped
+    as Markdown text, while the downstream HTML renderer retains its own
+    independent safety filtering.
     """
     if not url:
         return ""
-    url = _sanitize_url_for_single_line_output(url)
-    if not url.startswith(_SAFE_MARKDOWN_LINK_SCHEMES):
-        return url
-    if any(ch in url for ch in _MARKDOWN_LINK_UNSAFE_CHARS):
-        return url
-    return f"[{url}]({url})"
+    sanitized_url = _sanitize_url_for_single_line_output(url)
+    if not sanitized_url.strip():
+        return ""
+
+    has_whitespace_or_control = any(
+        ch.isspace() or ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F
+        for ch in url
+    )
+    safe_destination = False
+    if not has_whitespace_or_control and not any(
+        ch in sanitized_url for ch in _MARKDOWN_LINK_UNSAFE_CHARS
+    ):
+        try:
+            parsed = urlparse(sanitized_url)
+            _ = parsed.port
+            safe_destination = (
+                parsed.scheme.lower() in _SAFE_MARKDOWN_LINK_SCHEMES
+                and bool(parsed.netloc and parsed.hostname)
+            )
+        except ValueError:
+            safe_destination = False
+
+    if safe_destination:
+        return f"[{sanitized_url}]({sanitized_url})"
+    return _escape_markdown_text(sanitized_url)
 
 
 def render_full(report: schema.Report) -> str:
@@ -1672,7 +1704,9 @@ def render_full(report: schema.Report) -> str:
             lines.append(f"**{item.item_id}** (score:{score:.0f}) {item.author or ''} ({item.published_at or 'date unknown'}) [{_format_item_engagement(item)}]")
             lines.append(f"  {item.title}")
             if item.url:
-                lines.append(f"  {_markdown_url_link(item.url)}")
+                rendered_url = _markdown_url_link(item.url)
+                if rendered_url:
+                    lines.append(f"  {rendered_url}")
             if item.container:
                 lines.append(f"  *{item.container}*")
             if item.snippet:
@@ -2103,7 +2137,9 @@ def _render_candidate(
         f"   - {details}",
     ]
     if candidate.url:
-        lines.append(f"   - URL: {_markdown_url_link(candidate.url)}")
+        rendered_url = _markdown_url_link(candidate.url)
+        if rendered_url:
+            lines.append(f"   - URL: {rendered_url}")
     corroboration = _format_corroboration(candidate)
     if corroboration:
         lines.append(f"   - {corroboration}")
