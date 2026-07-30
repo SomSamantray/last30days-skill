@@ -1562,7 +1562,8 @@ def render_comparison_multi_context(
 
 
 _SAFE_MARKDOWN_LINK_SCHEMES = ("http://", "https://")
-_MARKDOWN_LINK_UNSAFE_CHARS = ("(", ")", "[", "]", "\\")
+_MARKDOWN_LINK_UNSAFE_CHARS = ("(", ")", "[", "]", "\\", "<", ">", "`")
+_MARKDOWN_PLAIN_TEXT_ESCAPES = re.compile(r"([\\`*_{}\[\]()#+\-.!|~])")
 
 
 def _sanitize_url_for_single_line_output(url: str) -> str:
@@ -1578,6 +1579,12 @@ def _sanitize_url_for_single_line_output(url: str) -> str:
     return re.sub(r"[\r\n]+", " ", url).strip()
 
 
+def _escape_markdown_plain_text(value: str) -> str:
+    """Make untrusted text inert in Markdown without hiding its contents."""
+    value = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return _MARKDOWN_PLAIN_TEXT_ESCAPES.sub(r"\\\1", value)
+
+
 def _markdown_url_link(url: str) -> str:
     """Render ``url`` as a markdown link when it's safe to, else as plain text.
 
@@ -1586,16 +1593,18 @@ def _markdown_url_link(url: str) -> str:
     adjacent markdown delimiters, and an unrestricted scheme (e.g.
     ``javascript:``) would become an active link with none of the safety
     filtering ``html_render.py`` already applies via
-    ``html.escape(url, quote=True)``. Falls back to the bare (sanitized) URL
-    string rather than guessing at an escaping scheme for markdown syntax.
+    ``html.escape(url, quote=True)``. Falls back to escaped plain text so
+    rejected input cannot remain active Markdown or raw HTML.
     """
     if not url:
         return ""
     url = _sanitize_url_for_single_line_output(url)
     if not url.startswith(_SAFE_MARKDOWN_LINK_SCHEMES):
-        return url
-    if any(ch in url for ch in _MARKDOWN_LINK_UNSAFE_CHARS):
-        return url
+        return _escape_markdown_plain_text(url)
+    if any(ch in url for ch in _MARKDOWN_LINK_UNSAFE_CHARS) or any(
+        ch.isspace() for ch in url
+    ):
+        return _escape_markdown_plain_text(url)
     return f"[{url}]({url})"
 
 
