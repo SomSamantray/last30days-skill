@@ -1548,32 +1548,46 @@ class TestMarkdownUrlLinkSafety(unittest.TestCase):
         # A `)` in the URL would prematurely close the markdown destination.
         url = "https://example.com/wiki/Foo_(bar)"
         result = render._markdown_url_link(url)
-        self.assertNotEqual(result, url)
+        self.assertEqual(result, r"https\://example\.com/wiki/Foo\_\(bar\)")
         self.assertNotIn("](", result)
-        self.assertIn(r"\(bar\)", result)
 
     def test_url_with_bracket_falls_back_to_plain_text(self):
         url = "https://example.com/search?q=[test]"
-        result = render._markdown_url_link(url)
-        self.assertNotEqual(result, url)
-        self.assertNotIn("](", result)
-        self.assertIn(r"\[test\]", result)
+        self.assertEqual(
+            render._markdown_url_link(url),
+            r"https\://example\.com/search?q=\[test\]",
+        )
 
     def test_non_http_scheme_falls_back_to_plain_text(self):
         # Untrusted scheme (e.g. javascript:) must never become an active link.
         url = "javascript:alert(1)"
-        result = render._markdown_url_link(url)
-        self.assertNotEqual(result, url)
-        self.assertNotIn("](", result)
-        self.assertIn(r"javascript\:alert\(1\)", result)
+        self.assertEqual(render._markdown_url_link(url), r"javascript\:alert\(1\)")
 
     def test_url_with_backslash_falls_back_to_plain_text(self):
         # A backslash can escape adjacent markdown delimiters.
         url = "https://example.com/\\]"
         result = render._markdown_url_link(url)
-        self.assertNotEqual(result, url)
+        self.assertEqual(result, "https\\://example\\.com/\\\\\\]")
         self.assertNotIn("](", result)
-        self.assertIn(r"\\\]", result)
+
+    def test_embedded_markdown_link_is_escaped_as_plain_text(self):
+        result = render._markdown_url_link("[click](javascript:alert)")
+        self.assertEqual(result, r"\[click\]\(javascript\:alert\)")
+        self.assertNotIn("[click](javascript:alert)", result)
+
+    def test_angle_autolink_and_raw_html_are_encoded(self):
+        autolink = render._markdown_url_link("<javascript:alert(1)>")
+        raw_html = render._markdown_url_link(
+            '<a href="javascript:alert(1)">click</a>'
+        )
+        self.assertEqual(autolink, r"&lt;javascript\:alert\(1\)&gt;")
+        self.assertNotIn("<a ", raw_html)
+        self.assertIn("&lt;a href=", raw_html)
+
+    def test_http_url_with_raw_html_delimiters_is_plain_text(self):
+        result = render._markdown_url_link("https://example.com/<script>")
+        self.assertEqual(result, r"https\://example\.com/&lt;script&gt;")
+        self.assertNotIn("](", result)
 
     def test_embedded_newline_is_stripped_even_from_plain_text_fallback(self):
         """Greptile follow-up: an embedded newline/CR must not survive into
@@ -1679,6 +1693,13 @@ class TestSourceUrlsAreClickable(unittest.TestCase):
         self.assertNotIn("\n- forged item", text)
         self.assertNotIn("\n  https://example.test/x", text)
 
+    def test_all_items_by_source_rejected_url_is_inert_plain_text(self):
+        report = sample_report()
+        report.items_by_source["reddit"][0].url = "[click](javascript:alert)"
+        text = render.render_full(report)
+        self.assertIn(r"  \[click\]\(javascript\:alert\)", text)
+        self.assertNotIn("[click](javascript:alert)", text)
+
     def test_render_candidate_url_is_markdown_link(self):
         candidate = schema.Candidate(
             candidate_id="c1", item_id="i1", source="reddit",
@@ -1692,6 +1713,19 @@ class TestSourceUrlsAreClickable(unittest.TestCase):
         self.assertIn(
             "URL: [https://example.com/thread](https://example.com/thread)", text
         )
+
+    def test_render_candidate_rejected_url_is_inert_plain_text(self):
+        candidate = schema.Candidate(
+            candidate_id="c1", item_id="i1", source="reddit",
+            title="Grounded result", url="<javascript:alert(1)>",
+            snippet="A snippet.", subquery_labels=["primary"],
+            native_ranks={"reddit": 1}, local_relevance=1.0, freshness=1,
+            engagement=100, source_quality=1.0, rrf_score=1.0,
+            sources=["reddit"], source_items=[],
+        )
+        text = "\n".join(render._render_candidate(candidate, "1."))
+        self.assertIn(r"URL: &lt;javascript\:alert\(1\)&gt;", text)
+        self.assertNotIn("<javascript:", text)
 
     def test_render_candidate_empty_url_renders_no_url_line(self):
         """Regression: unlike the item-loop location, _render_candidate had

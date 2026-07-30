@@ -67,13 +67,15 @@ def _build_search_query(topic: str, *, quoted: bool = True) -> str:
     Quoted (default): phrase-scoped exact match across all fields. Precise
     for topics that genuinely appear as a phrase in a title/abstract, but a
     natural-language multi-word topic ("AI video generation advances") almost
-    never appears verbatim, so it returns zero results (#908). Unquoted:
-    plain term matching, used as a fallback retry -- see ``search_arxiv``.
+    never appears verbatim, so it returns zero results (#908). Unquoted uses
+    an AND-conjoined clause for every individual term as a fallback retry.
 
     Inner double-quotes are stripped (arXiv has no phrase-escaping) either way.
     """
     phrase = _clean_phrase(topic)
-    return f'all:"{phrase}"' if quoted else f"all:{phrase}"
+    if quoted:
+        return f'all:"{phrase}"'
+    return " AND ".join(f'all:"{term}"' for term in phrase.split())
 
 
 def _clean_phrase(topic: str) -> str:
@@ -124,12 +126,17 @@ def _run_cli(cmd: List[str], timeout: int) -> Dict[str, Any]:
 
     stdout = result.stdout or ""
     if not stdout.strip():
-        return {"results": []}
+        _log("CLI returned empty stdout")
+        return {"results": [], "error": "empty stdout"}
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError as exc:
         _log(f"JSON decode failed: {exc}")
         return {"results": [], "error": f"json decode: {exc}"}
+
+    if not _is_entry_envelope(data):
+        _log("CLI returned an unrecognized JSON response")
+        return {"results": [], "error": "unrecognized JSON response"}
 
     return {"results": _extract_entries(data)}
 
@@ -156,6 +163,20 @@ def _extract_entries(data: Any) -> List[Dict[str, Any]]:
     return []
 
 
+def _is_entry_envelope(data: Any) -> bool:
+    """Return whether ``data`` has one of the supported entry-list shapes."""
+    if isinstance(data, list):
+        return True
+    if not isinstance(data, dict):
+        return False
+    results = data.get("results")
+    return (
+        isinstance(results, list)
+        or (isinstance(results, dict) and isinstance(results.get("entries"), list))
+        or isinstance(data.get("entries"), list)
+    )
+
+
 def search_arxiv(
     topic: str,
     from_date: str,
@@ -178,10 +199,8 @@ def search_arxiv(
     _log(f"query '{topic}' (relevance, max={limit})")
     response = _run_cli(cmd, timeout=SEARCH_TIMEOUT)
     _log(f"found {len(response.get('results') or [])} entries")
-    # A genuine zero-result quoted-phrase match (no error) is expected for any
-    # natural-language multi-word topic -- the phrase rarely appears verbatim
-    # in a title/abstract (#908). Retry once, unquoted, before giving up; a
-    # real failure (CLI error, timeout, missing binary) skips the retry.
+    # Retry a clean zero-result phrase match with individually quoted AND terms.
+    # CLI failures, malformed responses, and missing binaries skip the retry.
     if not response.get("error") and not response.get("results"):
         retry_cmd = _build_search_args(topic, limit, quoted=False)
         _log(f"quoted phrase matched nothing; retrying unquoted for '{topic}'")

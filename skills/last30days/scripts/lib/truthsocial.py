@@ -91,10 +91,8 @@ def search_truthsocial(
             "GET", url,
             headers={
                 "Authorization": f"Bearer {token}",
-                # Cloudflare in front of truthsocial.com 403s the skill's
-                # default User-Agent regardless of token validity (#909).
-                # http.BROWSER_USER_AGENT already exists for exactly this
-                # case (used by the keyless Reddit path).
+                # Cloudflare 403s the skill's default User-Agent regardless of token validity (#909).
+                # Reuse http.BROWSER_USER_AGENT, as the keyless Reddit path does.
                 "User-Agent": http.BROWSER_USER_AGENT,
                 "Accept": "application/json, text/plain, */*",
                 "Accept-Language": "en-US,en;q=0.9",

@@ -1563,7 +1563,7 @@ def render_comparison_multi_context(
 
 _SAFE_MARKDOWN_LINK_SCHEMES = ("http", "https")
 _MARKDOWN_LINK_UNSAFE_CHARS = ("(", ")", "[", "]", "\\", "<", ">", "`")
-_MARKDOWN_ESCAPE_CHARS = frozenset(r'''!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~''')
+_MARKDOWN_PLAIN_TEXT_ESCAPES = re.compile(r"([\\`*_{}\[\]()#+\-.!|~:])")
 
 
 def _sanitize_url_for_single_line_output(url: str) -> str:
@@ -1584,12 +1584,10 @@ def _sanitize_url_for_single_line_output(url: str) -> str:
     )
 
 
-def _escape_markdown_text(text: str) -> str:
-    """Escape ASCII punctuation so untrusted text stays inert in Markdown."""
-    return "".join(
-        f"\\{ch}" if ch in _MARKDOWN_ESCAPE_CHARS else ch
-        for ch in text
-    )
+def _escape_markdown_plain_text(value: str) -> str:
+    """Make untrusted text inert in Markdown without hiding its contents."""
+    value = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return _MARKDOWN_PLAIN_TEXT_ESCAPES.sub(r"\\\1", value)
 
 
 def _markdown_url_link(url: str) -> str:
@@ -1598,9 +1596,10 @@ def _markdown_url_link(url: str) -> str:
     Source URLs are untrusted API responses, not authored content: `(`/`)`/
     `[`/`]` would corrupt markdown link syntax, a backslash can escape
     adjacent markdown delimiters, and an unrestricted scheme (e.g.
-    ``javascript:``) would become an active link. Unsafe values are escaped
-    as Markdown text, while the downstream HTML renderer retains its own
-    independent safety filtering.
+    ``javascript:``) would become an active link with none of the safety
+    filtering ``html_render.py`` already applies via
+    ``html.escape(url, quote=True)``. Falls back to escaped plain text so
+    rejected input cannot remain active Markdown or raw HTML.
     """
     if not url:
         return ""
@@ -1628,7 +1627,7 @@ def _markdown_url_link(url: str) -> str:
 
     if safe_destination:
         return f"[{sanitized_url}]({sanitized_url})"
-    return _escape_markdown_text(sanitized_url)
+    return _escape_markdown_plain_text(sanitized_url)
 
 
 def render_full(report: schema.Report) -> str:
