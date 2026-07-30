@@ -267,9 +267,46 @@ class TestDiggAutoInstall:
 
         # The wizard now also best-effort-installs the additional default-on
         # Printing Press sources (arxiv/techmeme/trustpilot), so digg is one of
-        # several install calls rather than the only one.
+        # several install calls rather than the only one. Argv[0] must be the
+        # *resolved* npx path (mirroring shutil.which's return value), not the
+        # bare "npx" string -- passing the bare name breaks Windows, where
+        # shutil.which resolves PATHEXT (npx.CMD) but subprocess.run does not.
         mock_subproc.assert_any_call(
-            ["npx", "-y", setup_wizard.PRINTING_PRESS_NPM, "install", "digg", "--cli-only"],
+            ["/opt/homebrew/bin/npx", "-y", setup_wizard.PRINTING_PRESS_NPM, "install", "digg", "--cli-only"],
+            capture_output=True, text=True, timeout=setup_wizard.DIGG_INSTALL_TIMEOUT,
+        )
+        assert results["digg_installed"] is True
+        assert results["digg_action"] == "installed"
+
+    @patch("lib.cookie_extract.extract_cookies_with_source", return_value=None)
+    @patch("subprocess.run")
+    @patch("shutil.which")
+    def test_digg_install_uses_resolved_windows_npx_path(
+        self, mock_which, mock_subproc, mock_extract, tmp_path, monkeypatch
+    ):
+        """Regression for #904: a Windows-style resolved npx path (PATHEXT
+        resolution, e.g. npx.CMD) must be passed to subprocess.run verbatim --
+        not the bare string "npx", which fails with WinError 2 on Windows
+        because CreateProcess does not do PATHEXT resolution the way
+        shutil.which does."""
+        self._empty_home(tmp_path, monkeypatch)
+        calls = {"digg": 0}
+        windows_npx = r"C:\Program Files\nodejs\npx.CMD"
+
+        def which_side_effect(cmd):
+            if cmd == "digg-pp-cli":
+                calls["digg"] += 1
+                return None if calls["digg"] == 1 else r"C:\Users\me\.local\bin\digg-pp-cli"
+            if cmd == "npx":
+                return windows_npx
+            return None
+        mock_which.side_effect = which_side_effect
+        mock_subproc.return_value = MagicMock(returncode=0, stderr="")
+
+        results = setup_wizard.run_auto_setup({})
+
+        mock_subproc.assert_any_call(
+            [windows_npx, "-y", setup_wizard.PRINTING_PRESS_NPM, "install", "digg", "--cli-only"],
             capture_output=True, text=True, timeout=setup_wizard.DIGG_INSTALL_TIMEOUT,
         )
         assert results["digg_installed"] is True
