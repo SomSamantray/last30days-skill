@@ -1561,6 +1561,29 @@ def render_comparison_multi_context(
     return "\n".join(lines).strip() + "\n"
 
 
+_SAFE_MARKDOWN_LINK_SCHEMES = ("http://", "https://")
+
+
+def _markdown_url_link(url: str) -> str:
+    """Render ``url`` as a markdown link when it's safe to, else as plain text.
+
+    Source URLs are untrusted API responses, not authored content -- a `)` in
+    the URL would prematurely close the markdown link destination and corrupt
+    the rest of the line, and an unrestricted scheme (e.g. ``javascript:``)
+    would become an active link with none of the safety filtering
+    ``html_render.py`` already applies via ``html.escape(url, quote=True)``.
+    Falls back to the bare URL string (not a link) rather than guessing at an
+    escaping scheme for markdown link syntax specifically.
+    """
+    if not url:
+        return ""
+    if not url.startswith(_SAFE_MARKDOWN_LINK_SCHEMES):
+        return url
+    if "(" in url or ")" in url or "[" in url or "]" in url:
+        return url
+    return f"[{url}]({url})"
+
+
 def render_full(report: schema.Report) -> str:
     """Full data dump: ALL clusters + ALL items by source. For saved files and debugging."""
     evidence_report = schema.without_sources(report, {"corpus"})
@@ -1634,7 +1657,7 @@ def render_full(report: schema.Report) -> str:
             lines.append(f"**{item.item_id}** (score:{score:.0f}) {item.author or ''} ({item.published_at or 'date unknown'}) [{_format_item_engagement(item)}]")
             lines.append(f"  {item.title}")
             if item.url:
-                lines.append(f"  [{item.url}]({item.url})")
+                lines.append(f"  {_markdown_url_link(item.url)}")
             if item.container:
                 lines.append(f"  *{item.container}*")
             if item.snippet:
@@ -2065,7 +2088,7 @@ def _render_candidate(
         f"   - {details}",
     ]
     if candidate.url:
-        lines.append(f"   - URL: [{candidate.url}]({candidate.url})")
+        lines.append(f"   - URL: {_markdown_url_link(candidate.url)}")
     corroboration = _format_corroboration(candidate)
     if corroboration:
         lines.append(f"   - {corroboration}")

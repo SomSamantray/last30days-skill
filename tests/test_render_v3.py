@@ -1532,6 +1532,37 @@ class TestPolymarketTopMarkets(unittest.TestCase):
         self.assertIn(": Kanye ", line)
 
 
+class TestMarkdownUrlLinkSafety(unittest.TestCase):
+    """Greptile follow-up on #886/#912: source URLs are untrusted API
+    responses, not authored content -- must not be embedded verbatim into
+    markdown link syntax without checking for characters/schemes that would
+    corrupt or misuse it."""
+
+    def test_plain_https_url_becomes_a_link(self):
+        self.assertEqual(
+            render._markdown_url_link("https://example.com/thread"),
+            "[https://example.com/thread](https://example.com/thread)",
+        )
+
+    def test_url_with_closing_paren_falls_back_to_plain_text(self):
+        # A `)` in the URL would prematurely close the markdown destination.
+        url = "https://example.com/wiki/Foo_(bar)"
+        self.assertEqual(render._markdown_url_link(url), url)
+        self.assertNotIn("](", render._markdown_url_link(url))
+
+    def test_url_with_bracket_falls_back_to_plain_text(self):
+        url = "https://example.com/search?q=[test]"
+        self.assertEqual(render._markdown_url_link(url), url)
+
+    def test_non_http_scheme_falls_back_to_plain_text(self):
+        # Untrusted scheme (e.g. javascript:) must never become an active link.
+        url = "javascript:alert(1)"
+        self.assertEqual(render._markdown_url_link(url), url)
+
+    def test_empty_url_returns_empty_string(self):
+        self.assertEqual(render._markdown_url_link(""), "")
+
+
 class TestSourceUrlsAreClickable(unittest.TestCase):
     """Regression for #886: source URLs rendered as plain text instead of
     markdown links in the saved raw report and internal evidence block."""
