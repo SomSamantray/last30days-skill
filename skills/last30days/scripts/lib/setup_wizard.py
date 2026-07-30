@@ -112,11 +112,17 @@ def run_auto_setup(config: Dict[str, Any], *, allow_browser_cookies: bool = Fals
                     cookies_found[source_name] = result[1]
                     break  # Found cookies for this service, stop trying browsers
 
-    # Check yt-dlp availability and install via Homebrew if missing
+    # Check yt-dlp availability and install via Homebrew if missing. Windows
+    # has no Homebrew, and its working install path is `pip install yt-dlp`
+    # (see #904), so it gets its own no-op-install guidance branch instead of
+    # falling into the Homebrew-oriented no_homebrew outcome.
     ytdlp_action: str
     if shutil.which("yt-dlp") is not None:
         ytdlp_installed = True
         ytdlp_action = "already_installed"
+    elif os.name == "nt":
+        ytdlp_installed = False
+        ytdlp_action = "no_pip_windows"
     elif shutil.which("brew") is not None:
         brew_stderr = ""
         try:
@@ -573,6 +579,11 @@ def get_setup_status_text(results: Dict[str, Any]) -> str:
         lines.append("  - yt-dlp install failed \u2014 run `brew install yt-dlp` manually")
     elif ytdlp_action == "no_homebrew":
         lines.append("  - yt-dlp not found. Install Homebrew first, then: brew install yt-dlp")
+    elif ytdlp_action == "no_pip_windows":
+        lines.append(
+            "  - yt-dlp not found. Install with: pip install yt-dlp "
+            "(it may install to a Scripts directory not on PATH -- add it to PATH if YouTube search stays inactive)"
+        )
     elif ytdlp_action == "already_installed":
         lines.append("  - yt-dlp already installed")
     elif results.get("ytdlp_installed", False):
