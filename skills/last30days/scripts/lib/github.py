@@ -183,7 +183,7 @@ QUALIFIER_KEYS = frozenset({
 })
 
 _QUALIFIER_RE = re.compile(
-    r"(?:(?<=[\s,;])|^)(?:" + "|".join(sorted(QUALIFIER_KEYS)) + r"):(?:[<>]=?)?(?:\"[^\"]*\"|\S*)",
+    r"(?:(?<=[\s,;])|^)(?:" + "|".join(sorted(QUALIFIER_KEYS)) + r"):(?:[<>]=?)?(?:\"[^\"]*\"|[^\s,;()\[\]]+)[,;]?",
     re.IGNORECASE,
 )
 

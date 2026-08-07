@@ -553,6 +553,20 @@ class TestStripSearchQualifiers(unittest.TestCase):
             "open source",
         )
 
+    def test_topic_term_glued_after_qualifier_value_is_preserved(self):
+        # A topic term glued after a qualifier value ("created:>2025-03-20,
+        # robotics") must survive stripping - the value class must stop at
+        # the separator instead of greedily eating the following term.
+        result = github.strip_search_qualifiers("created:>2025-03-20,robotics")
+        self.assertIn("robotics", result)
+        self.assertNotIn("created:", result)
+
+    def test_mid_topic_qualifier_with_glued_term_preserves_subject(self):
+        result = github.strip_search_qualifiers("ai created:>2025-03-20,robotics")
+        self.assertIn("robotics", result)
+        self.assertIn("ai", result)
+        self.assertNotIn("created:", result)
+
 
 class TestSearchGithubQualifiers(unittest.TestCase):
     """End-to-end behavior of search_github on qualifier-bearing topics."""
@@ -626,6 +640,18 @@ class TestSearchGithubQualifiers(unittest.TestCase):
         mock_fetch.assert_not_called()
         self.assertEqual(result["items"], [])
         self.assertIn("error", result)
+
+    @patch.object(github, "_resolve_token", return_value="test-token")
+    def test_glued_term_after_qualifier_value_reaches_query(self, mock_token):
+        captured = {}
+        with patch.object(github, "_fetch_json", side_effect=self._capturing_fetch(captured)):
+            github.search_github(
+                "ai created:>2025-03-20,robotics", "2026-07-01", "2026-07-31",
+            )
+        q = self._query(captured["url"])
+        self.assertIn("robotics", q)
+        self.assertIn("ai", q)
+        self.assertEqual(q.count("created:"), 1)
 
 
 if __name__ == "__main__":
