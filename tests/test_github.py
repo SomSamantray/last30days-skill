@@ -496,10 +496,6 @@ class TestPersonPushEventsLane(unittest.TestCase):
         self.assertEqual(items[0]["metadata"]["event_id"], "2")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestStripSearchQualifiers(unittest.TestCase):
     """Planner-injected GitHub search qualifiers must never reach the query
     builder: search_github appends its own created:>{from_date}, and two
@@ -533,6 +529,28 @@ class TestStripSearchQualifiers(unittest.TestCase):
         self.assertEqual(
             github.strip_search_qualifiers("repo:facebook/react bug"),
             "bug",
+        )
+
+    def test_qualifier_glued_after_comma_is_stripped(self):
+        # A comma-glued qualifier (planner output like "ai,created:>2025-03-20")
+        # must not survive to collide with the adapter's own created: window.
+        self.assertEqual(
+            github.strip_search_qualifiers("ai,created:>2025-03-20"),
+            "ai,",
+        )
+
+    def test_qualifier_glued_after_semicolon_is_stripped(self):
+        self.assertEqual(
+            github.strip_search_qualifiers("ai;created:>2025-03-20"),
+            "ai;",
+        )
+
+    def test_quoted_qualifier_value_fully_consumed(self):
+        # label:"bug fix" spans a space; the whole quoted value must be
+        # consumed so no stray fragment (e.g. `fix"`) reaches the query.
+        self.assertEqual(
+            github.strip_search_qualifiers('label:"bug fix" open source'),
+            "open source",
         )
 
 
@@ -586,3 +604,29 @@ class TestSearchGithubQualifiers(unittest.TestCase):
         # it must survive extract_core_subject + the qualifier strip.
         self.assertIn("state", q)
         self.assertEqual(q.count("created:"), 1)
+
+
+
+    @patch.object(github, "_resolve_token", return_value="test-token")
+    def test_comma_glued_qualifier_builds_single_created_query(self, mock_token):
+        captured = {}
+        with patch.object(github, "_fetch_json", side_effect=self._capturing_fetch(captured)):
+            github.search_github(
+                "ai,created:>2025-03-20", "2026-07-01", "2026-07-31",
+            )
+        q = self._query(captured["url"])
+        self.assertEqual(q.count("created:"), 1)
+        self.assertIn("created:>2026-07-01", q)
+        self.assertNotIn("created:>2025-03-20", q)
+
+    @patch.object(github, "_resolve_token", return_value="test-token")
+    def test_empty_topic_errors_without_network(self, mock_token):
+        with patch.object(github, "_fetch_json") as mock_fetch:
+            result = github.search_github("", "2026-07-01", "2026-07-31")
+        mock_fetch.assert_not_called()
+        self.assertEqual(result["items"], [])
+        self.assertIn("error", result)
+
+
+if __name__ == "__main__":
+    unittest.main()
