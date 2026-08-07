@@ -2,6 +2,7 @@
 
 import json
 import unittest
+import urllib.parse
 from unittest.mock import patch, MagicMock
 
 from lib import github
@@ -497,3 +498,91 @@ class TestPersonPushEventsLane(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStripSearchQualifiers(unittest.TestCase):
+    """Planner-injected GitHub search qualifiers must never reach the query
+    builder: search_github appends its own created:>{from_date}, and two
+    created: qualifiers collide (GitHub honors the first), which then makes
+    the local date filter drop everything (issue #949)."""
+
+    def test_strips_qualifiers_keeps_words(self):
+        self.assertEqual(
+            github.strip_search_qualifiers(
+                "open source ai stars:>1000 created:>2025-03-20"
+            ),
+            "open source ai",
+        )
+
+    def test_plain_word_is_not_a_qualifier_without_colon(self):
+        self.assertEqual(
+            github.strip_search_qualifiers("ai in healthcare"),
+            "ai in healthcare",
+        )
+
+    def test_qualifiers_removed_from_mixed_topic(self):
+        self.assertEqual(
+            github.strip_search_qualifiers("langchain is:issue created:>2026-01-01"),
+            "langchain",
+        )
+
+    def test_case_insensitive_qualifier_only_topic(self):
+        self.assertEqual(github.strip_search_qualifiers("Stars:>1000"), "")
+
+    def test_slash_containing_value_consumed(self):
+        self.assertEqual(
+            github.strip_search_qualifiers("repo:facebook/react bug"),
+            "bug",
+        )
+
+
+class TestSearchGithubQualifiers(unittest.TestCase):
+    """End-to-end behavior of search_github on qualifier-bearing topics."""
+
+    def _capturing_fetch(self, captured):
+        def fake_fetch(url, *args, **kwargs):
+            captured["url"] = url
+            return {"total_count": 0, "items": []}
+        return fake_fetch
+
+    def _query(self, captured_url):
+        return urllib.parse.parse_qs(
+            urllib.parse.urlparse(captured_url).query
+        )["q"][0]
+
+    @patch.object(github, "_resolve_token", return_value="test-token")
+    def test_planner_qualifiers_stripped_before_query_build(self, mock_token):
+        captured = {}
+        with patch.object(github, "_fetch_json", side_effect=self._capturing_fetch(captured)):
+            github.search_github(
+                "open source ai stars:>1000 created:>2025-03-20",
+                "2026-07-01", "2026-07-31",
+            )
+        q = self._query(captured["url"])
+        self.assertEqual(q, "open source ai created:>2026-07-01")
+        self.assertEqual(q.count("created:"), 1)
+
+    @patch.object(github, "_resolve_token", return_value="test-token")
+    def test_qualifier_only_topic_errors_without_network(self, mock_token):
+        with patch.object(github, "_fetch_json") as mock_fetch:
+            result = github.search_github(
+                "created:>2025-03-20", "2026-07-01", "2026-07-31",
+            )
+        mock_fetch.assert_not_called()
+        self.assertEqual(result["items"], [])
+        self.assertIn("error", result)
+        self.assertIn("qualifier", result["error"].lower())
+        self.assertEqual(result["context"]["from_date"], "2026-07-01")
+
+    @patch.object(github, "_resolve_token", return_value="test-token")
+    def test_qualifier_key_word_without_colon_survives(self, mock_token):
+        captured = {}
+        with patch.object(github, "_fetch_json", side_effect=self._capturing_fetch(captured)):
+            github.search_github(
+                "state of the art ai", "2026-07-01", "2026-07-31",
+            )
+        q = self._query(captured["url"])
+        # `state` is a GitHub qualifier key but appears here without a colon;
+        # it must survive extract_core_subject + the qualifier strip.
+        self.assertIn("state", q)
+        self.assertEqual(q.count("created:"), 1)
