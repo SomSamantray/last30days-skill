@@ -177,6 +177,9 @@ def _compute_relevance(
 # quotes ("(created:>2025-03-20)", '"stars:>1000"'), which an LLM planner
 # plausibly emits; _WRAPPED_QUALIFIER_RE consumes the whole wrapper pair with
 # the qualifier so no stray `()`/`""` residue reaches the query (issue #952).
+# The plain regex's boundary also accepts wrapper openers so a qualifier with
+# a missing closer ("(created:>2025-03-20") is still stripped rather than
+# leaking into the query; only the stray opener survives, harmlessly.
 QUALIFIER_KEYS = frozenset({
     "archived", "assignee", "author", "base", "closed", "comments", "commenter",
     "created", "fork", "forks", "head", "in", "interactions", "involves", "is",
@@ -189,7 +192,7 @@ QUALIFIER_KEYS = frozenset({
 _QUALIFIER_KEYS_ALT = "|".join(sorted(QUALIFIER_KEYS))
 
 _QUALIFIER_RE = re.compile(
-    r"(?:(?<=[\s,;])|^)(?:" + _QUALIFIER_KEYS_ALT + r"):(?:[<>]=?)?(?:\"[^\"]*\"|[^\s,;()\[\]]+)[,;]?",
+    r"(?:(?<=[\s,;(\[\"'])|^)(?:" + _QUALIFIER_KEYS_ALT + r"):(?:[<>]=?)?(?:\"[^\"]*\"|[^\s,;()\[\]]+)[,;]?",
     re.IGNORECASE,
 )
 

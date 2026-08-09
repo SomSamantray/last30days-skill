@@ -573,6 +573,27 @@ class TestStripSearchQualifiers(unittest.TestCase):
             "",
         )
 
+    def test_missing_closer_qualifier_still_stripped(self):
+        # An opener without its closer ("(created:>2025-03-20") must not leak
+        # the qualifier into the query: only the stray opener survives, and the
+        # collision class (#949) stays dead.
+        result = github.strip_search_qualifiers("(created:>2025-03-20")
+        self.assertNotIn("created:", result)
+
+    def test_quote_wrapped_with_space_inside_does_not_leak_qualifier(self):
+        # '"created:>2025-03-20 abc"' has a space in the quoted value, so it is
+        # not a single wrapper pair; the qualifier itself must still not reach
+        # the query.
+        result = github.strip_search_qualifiers('"created:>2025-03-20 abc"')
+        self.assertNotIn("created:", result)
+
+    def test_wrapped_qualifier_with_glued_term_preserves_term(self):
+        # Mirrors the plain glued-term case: "(created:>2025-03-20,robotics)"
+        # must strip the qualifier and keep the term, with no created: leak.
+        result = github.strip_search_qualifiers("(created:>2025-03-20,robotics)")
+        self.assertIn("robotics", result)
+        self.assertNotIn("created:", result)
+
     def test_case_insensitive_qualifier_only_topic(self):
         self.assertEqual(github.strip_search_qualifiers("Stars:>1000"), "")
 
