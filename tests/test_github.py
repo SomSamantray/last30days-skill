@@ -716,8 +716,6 @@ class TestSearchGithubQualifiers(unittest.TestCase):
         q = self._query(captured["url"])
         self.assertEqual(q, "open source ai created:>2026-07-01")
         self.assertEqual(q.count("created:"), 1)
-        self.assertNotIn("(", q)
-        self.assertNotIn(")", q)
 
     @patch.object(github, "_resolve_token", return_value="test-token")
     def test_quote_wrapped_qualifier_only_topic_errors_without_network(self, mock_token):

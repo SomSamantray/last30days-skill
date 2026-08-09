@@ -173,9 +173,10 @@ def _compute_relevance(
 # honours the FIRST and silently ignores ours. The API then returns
 # out-of-window items that `parse_github_response`'s date filter drops
 # wholesale — a source that fetches results and reports zero (issue #949).
-# Qualifiers may also arrive wrapped in parentheses, quotes, or brackets
-# ("(created:>2025-03-20)", '"stars:>1000"'), which an LLM planner plausibly
-# emits; the boundary set below accepts those wrapper openers too (issue #952).
+# Qualifiers may also arrive fully wrapped in one pair of parens/brackets/
+# quotes ("(created:>2025-03-20)", '"stars:>1000"'), which an LLM planner
+# plausibly emits; _WRAPPED_QUALIFIER_RE consumes the whole wrapper pair with
+# the qualifier so no stray `()`/`""` residue reaches the query (issue #952).
 QUALIFIER_KEYS = frozenset({
     "archived", "assignee", "author", "base", "closed", "comments", "commenter",
     "created", "fork", "forks", "head", "in", "interactions", "involves", "is",
@@ -185,14 +186,25 @@ QUALIFIER_KEYS = frozenset({
     "topic", "topics", "type", "updated", "user",
 })
 
+_QUALIFIER_KEYS_ALT = "|".join(sorted(QUALIFIER_KEYS))
+
 _QUALIFIER_RE = re.compile(
-    r"(?:(?<=[\s,;(\[\"'])|^)(?:" + "|".join(sorted(QUALIFIER_KEYS)) + r"):(?:[<>]=?)?(?:\"[^\"]*\"|[^\s,;()\[\]\"']+)[,;]?",
+    r"(?:(?<=[\s,;])|^)(?:" + _QUALIFIER_KEYS_ALT + r"):(?:[<>]=?)?(?:\"[^\"]*\"|[^\s,;()\[\]]+)[,;]?",
     re.IGNORECASE,
 )
 
-# Leftover wrapper pairs after a wrapped qualifier is stripped, e.g. the `()`
-# left by "(created:>2025-03-20)". Removed to fixpoint so nested wrappers
-# ("((created:>2025-03-20))") collapse too; a pair enclosing real text stays.
+# A qualifier fully wrapped in a single pair of parens/brackets/quotes. The
+# wrapper pair is consumed with the qualifier, so stripping leaves no residue.
+# An unbalanced quote (e.g. `label:"bug`) is not a wrapper shape and is left
+# to _QUALIFIER_RE, which strips the qualifier as before.
+_WRAPPED_QUALIFIER_RE = re.compile(
+    r"[\(\[\"'](?:" + _QUALIFIER_KEYS_ALT + r"):(?:[<>]=?)?(?:\"[^\"]*\"|[^\s,;()\[\]]+)[\)\]\"']",
+    re.IGNORECASE,
+)
+
+# Empty wrapper pairs left behind when a nested wrapper collapses (e.g. the
+# `()` from "((created:>2025-03-20))"). Removed to fixpoint; a pair enclosing
+# real text stays.
 _EMPTY_WRAPPER_RE = re.compile(r"\(\s*\)|\[\s*\]|\"\s*\"|'\s*'")
 
 
@@ -203,11 +215,13 @@ def strip_search_qualifiers(text: str) -> str:
     but qualifiers; callers must handle that rather than searching on an empty
     term, which would match the entire site.
     """
-    stripped = _QUALIFIER_RE.sub(" ", text)
-    prev = None
-    while prev != stripped:
-        prev = stripped
-        stripped = _EMPTY_WRAPPER_RE.sub("", stripped)
+    stripped = _WRAPPED_QUALIFIER_RE.sub(" ", text)
+    stripped = _QUALIFIER_RE.sub(" ", stripped)
+    while True:
+        cleaned = _EMPTY_WRAPPER_RE.sub("", stripped)
+        if cleaned == stripped:
+            break
+        stripped = cleaned
     return " ".join(stripped.split())
 
 
