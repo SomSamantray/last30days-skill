@@ -173,6 +173,9 @@ def _compute_relevance(
 # honours the FIRST and silently ignores ours. The API then returns
 # out-of-window items that `parse_github_response`'s date filter drops
 # wholesale — a source that fetches results and reports zero (issue #949).
+# Qualifiers may also arrive wrapped in parentheses, quotes, or brackets
+# ("(created:>2025-03-20)", '"stars:>1000"'), which an LLM planner plausibly
+# emits; the boundary set below accepts those wrapper openers too (issue #952).
 QUALIFIER_KEYS = frozenset({
     "archived", "assignee", "author", "base", "closed", "comments", "commenter",
     "created", "fork", "forks", "head", "in", "interactions", "involves", "is",
@@ -183,9 +186,14 @@ QUALIFIER_KEYS = frozenset({
 })
 
 _QUALIFIER_RE = re.compile(
-    r"(?:(?<=[\s,;])|^)(?:" + "|".join(sorted(QUALIFIER_KEYS)) + r"):(?:[<>]=?)?(?:\"[^\"]*\"|[^\s,;()\[\]]+)[,;]?",
+    r"(?:(?<=[\s,;(\[\"'])|^)(?:" + "|".join(sorted(QUALIFIER_KEYS)) + r"):(?:[<>]=?)?(?:\"[^\"]*\"|[^\s,;()\[\]\"']+)[,;]?",
     re.IGNORECASE,
 )
+
+# Leftover wrapper pairs after a wrapped qualifier is stripped, e.g. the `()`
+# left by "(created:>2025-03-20)". Removed to fixpoint so nested wrappers
+# ("((created:>2025-03-20))") collapse too; a pair enclosing real text stays.
+_EMPTY_WRAPPER_RE = re.compile(r"\(\s*\)|\[\s*\]|\"\s*\"|'\s*'")
 
 
 def strip_search_qualifiers(text: str) -> str:
@@ -195,7 +203,12 @@ def strip_search_qualifiers(text: str) -> str:
     but qualifiers; callers must handle that rather than searching on an empty
     term, which would match the entire site.
     """
-    return " ".join(_QUALIFIER_RE.sub(" ", text).split())
+    stripped = _QUALIFIER_RE.sub(" ", text)
+    prev = None
+    while prev != stripped:
+        prev = stripped
+        stripped = _EMPTY_WRAPPER_RE.sub("", stripped)
+    return " ".join(stripped.split())
 
 
 def search_github(

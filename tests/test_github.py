@@ -522,6 +522,57 @@ class TestStripSearchQualifiers(unittest.TestCase):
             "langchain",
         )
 
+    def test_paren_wrapped_qualifier_stripped(self):
+        # Wrapper shapes bypassed the strip until the boundary accepted them
+        # (issue #952); a surviving created: would collide with the adapter's
+        # own window and silently zero out the source (issue #949 class).
+        self.assertEqual(
+            github.strip_search_qualifiers("(created:>2025-03-20)"),
+            "",
+        )
+
+    def test_double_quote_wrapped_qualifier_stripped(self):
+        self.assertEqual(
+            github.strip_search_qualifiers('"created:>2025-03-20"'),
+            "",
+        )
+
+    def test_single_quote_wrapped_qualifier_stripped(self):
+        self.assertEqual(
+            github.strip_search_qualifiers("'is:issue'"),
+            "",
+        )
+
+    def test_bracket_wrapped_qualifier_stripped(self):
+        self.assertEqual(
+            github.strip_search_qualifiers("[stars:>1000]"),
+            "",
+        )
+
+    def test_wrapped_qualifier_among_words_leaves_no_empty_pair(self):
+        self.assertEqual(
+            github.strip_search_qualifiers("ai (created:>2025-03-20) model"),
+            "ai model",
+        )
+
+    def test_quoted_value_and_wrapped_qualifier_both_stripped(self):
+        self.assertEqual(
+            github.strip_search_qualifiers('label:"bug fix" (created:>2025-03-20)'),
+            "",
+        )
+
+    def test_wrapped_and_plain_duplicate_qualifiers_both_stripped(self):
+        self.assertEqual(
+            github.strip_search_qualifiers("(created:>2025-03-20) created:>2026-01-01"),
+            "",
+        )
+
+    def test_nested_wrapper_collapses_to_fixpoint(self):
+        self.assertEqual(
+            github.strip_search_qualifiers("((created:>2025-03-20))"),
+            "",
+        )
+
     def test_case_insensitive_qualifier_only_topic(self):
         self.assertEqual(github.strip_search_qualifiers("Stars:>1000"), "")
 
@@ -652,6 +703,35 @@ class TestSearchGithubQualifiers(unittest.TestCase):
         self.assertIn("robotics", q)
         self.assertIn("ai", q)
         self.assertEqual(q.count("created:"), 1)
+
+    @patch.object(github, "_resolve_token", return_value="test-token")
+    def test_paren_wrapped_qualifier_builds_single_created_query(self, mock_token):
+        # Wrapped qualifier (issue #952) must not survive into the query to
+        # collide with the adapter's own created: window (issue #949 class).
+        captured = {}
+        with patch.object(github, "_fetch_json", side_effect=self._capturing_fetch(captured)):
+            github.search_github(
+                "open source ai (created:>2025-03-20)", "2026-07-01", "2026-07-31",
+            )
+        q = self._query(captured["url"])
+        self.assertEqual(q, "open source ai created:>2026-07-01")
+        self.assertEqual(q.count("created:"), 1)
+        self.assertNotIn("(", q)
+        self.assertNotIn(")", q)
+
+    @patch.object(github, "_resolve_token", return_value="test-token")
+    def test_quote_wrapped_qualifier_only_topic_errors_without_network(self, mock_token):
+        # A quote-wrapped qualifier-only topic strips to nothing, so the
+        # adapter must report the empty-topic error instead of querying an
+        # empty term (issue #952; mirrors the plain qualifier-only case).
+        with patch.object(github, "_fetch_json") as mock_fetch:
+            result = github.search_github(
+                '"created:>2025-03-20"', "2026-07-01", "2026-07-31",
+            )
+        mock_fetch.assert_not_called()
+        self.assertEqual(result["items"], [])
+        self.assertIn("error", result)
+        self.assertIn("qualifier", result["error"].lower())
 
 
 if __name__ == "__main__":
