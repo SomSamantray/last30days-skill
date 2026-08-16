@@ -3968,6 +3968,31 @@ def _merge_reddit_items(free: list[dict], sc: list[dict]) -> list[dict]:
     return merged
 
 
+# Thinness floor for the ScrapeCreators YouTube search backstop: yt-dlp results
+# below this count are treated as a degraded lane (e.g. bot-gated runs return
+# 1-2 stale items instead of zero, issue #977) and trigger the SC search
+# backstop, which costs at most one SC search per thin subquery when a key is
+# present. Deliberately tunable.
+_YT_SC_MIN_ITEMS = 3
+
+
+def _merge_youtube_items(free: list[dict], sc: list[dict]) -> list[dict]:
+    """Merge free + ScrapeCreators YouTube items, free first, deduped by video id.
+
+    Used when the thinness-floor backstop backfills a thin yt-dlp run with SC,
+    so a video present in both is never double-listed and the backstop never
+    discards items yt-dlp already returned.
+    """
+    merged = list(free)
+    seen = {it.get("video_id") for it in free}
+    for it in sc:
+        vid = it.get("video_id")
+        if vid and vid not in seen:
+            seen.add(vid)
+            merged.append(it)
+    return merged
+
+
 def _retrieve_stream(*args, **kwargs) -> tuple[list[dict], dict]:
     """Run one stream and retain HTTP failures swallowed by source adapters."""
     # run_started is passed through but not used here; it goes to _retrieve_stream_impl
@@ -4374,17 +4399,33 @@ def _retrieve_stream_impl(
             except Exception as exc:
                 youtube_failure = str(exc)
                 result = None
-        # Fall back to SC YouTube search if yt-dlp failed or isn't installed.
-        if (result is None or not result.get("items")) and sc_token:
+        # Fall back to SC YouTube search when yt-dlp failed, returned nothing,
+        # or returned fewer than the thinness floor. YouTube bot-gates yt-dlp
+        # by returning 1-2 stale items instead of zero (#977), so a zero-only
+        # trigger would report a degraded lane as healthy.
+        free_items = list(result.get("items") or []) if result else []
+        if len(free_items) < _YT_SC_MIN_ITEMS and sc_token:
+            if free_items:
+                sys.stderr.write(
+                    f"[YouTube] yt-dlp returned {len(free_items)} items "
+                    f"(below the {_YT_SC_MIN_ITEMS}-item floor); "
+                    "backfilling with ScrapeCreators\n"
+                )
             try:
-                result = youtube_yt.search_youtube_sc(
+                sc_result = youtube_yt.search_youtube_sc(
                     yt_query, from_date, to_date, depth=depth, token=sc_token,
                 )
-                if result.get("error"):
-                    youtube_failure = str(result["error"])
+                if sc_result.get("error"):
+                    youtube_failure = str(sc_result["error"])
+                result = {
+                    "items": _merge_youtube_items(
+                        free_items, sc_result.get("items") or [],
+                    ),
+                }
             except Exception as exc:
                 youtube_failure = str(exc)
-                result = None
+                # Never discard the free items on backstop failure (R2).
+                result = {"items": free_items}
         if result is None:
             result = {"items": []}
         # Enrich top videos with comments (default-on when a key is present).
