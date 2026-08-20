@@ -127,6 +127,78 @@ class TestStoredAuth(unittest.TestCase):
         self.assertEqual(xurl_x.AUTH_OK, status)
         self.assertIn(str(self.store), detail)
 
+    def test_directory_layout_auth_yml_with_token_is_ok(self):
+        # Current xurl (>=1.1) stores credentials at ~/.xurl/auth.yml inside
+        # the ~/.xurl directory. Regression for #978: this was misread as
+        # "no token store" because the directory itself fails is_file().
+        self.store.mkdir(exist_ok=True)
+        auth_yml = self.store / "auth.yml"
+        auth_yml.write_text(
+            "apps:\n  app:\n    oauth2_tokens:\n      me:\n        oauth2:\n"
+            "          access_token: dummy-not-real\n",
+            encoding="utf-8",
+        )
+        status, detail = self._status()
+        self.assertEqual(xurl_x.AUTH_OK, status)
+        self.assertIn("auth.yml", detail)
+
+    def test_directory_layout_empty_auth_yml_is_missing(self):
+        self.store.mkdir(exist_ok=True)
+        (self.store / "auth.yml").write_text("", encoding="utf-8")
+        status, _ = self._status()
+        self.assertEqual(xurl_x.AUTH_MISSING, status)
+
+    def test_directory_layout_without_auth_yml_is_missing(self):
+        self.store.mkdir(exist_ok=True)
+        status, detail = self._status()
+        self.assertEqual(xurl_x.AUTH_MISSING, status)
+        self.assertIn("no token store", detail)
+
+    def test_directory_layout_unreadable_auth_yml_is_error(self):
+        self.store.mkdir(exist_ok=True)
+        (self.store / "auth.yml").write_text(
+            "access_token: dummy-not-real\n", encoding="utf-8"
+        )
+        class _BrokenFile:
+            def __init__(self, path):
+                self._path = path
+
+            def is_file(self):
+                return True
+
+            def read_text(self, *args, **kwargs):
+                raise PermissionError(13, "Permission denied")
+
+            def __str__(self):
+                return str(self._path)
+
+        status, detail = self._status(
+            path=_BrokenFile(self.store / "auth.yml")
+        )
+        self.assertEqual(xurl_x.AUTH_ERROR, status)
+        self.assertIn("PermissionError", detail)
+
+    def test_directory_layout_has_stored_auth_with_binary(self):
+        self.store.mkdir(exist_ok=True)
+        (self.store / "auth.yml").write_text(
+            "access_token: dummy-not-real\n", encoding="utf-8"
+        )
+        with mock.patch("lib.xurl_x.token_store_path", return_value=self.store), \
+             mock.patch("lib.xurl_x.shutil.which", return_value="/usr/local/bin/xurl"):
+            self.assertTrue(xurl_x.has_stored_auth())
+
+    def test_directory_layout_no_subprocess_spawned(self):
+        self.store.mkdir(exist_ok=True)
+        (self.store / "auth.yml").write_text(
+            "access_token: dummy-not-real\n", encoding="utf-8"
+        )
+        with mock.patch(
+            "subprocess.run",
+            side_effect=AssertionError("local auth evidence must not spawn a subprocess"),
+        ):
+            status, _ = self._status()
+        self.assertEqual(xurl_x.AUTH_OK, status)
+
     def test_legacy_json_store_with_bearer_token_is_ok(self):
         self.store.write_text(
             json.dumps({"bearer_token": {"bearer": "dummy-not-real"}}),
@@ -176,8 +248,8 @@ class TestStoredAuth(unittest.TestCase):
              mock.patch("lib.xurl_x.shutil.which", return_value="/usr/local/bin/xurl"):
             self.assertFalse(xurl_x.has_stored_auth())
 
-    def test_default_store_path_is_home_dot_xurl(self):
-        self.assertEqual(Path.home() / ".xurl", xurl_x.token_store_path())
+    def test_default_store_path_is_home_dot_xurl_auth_yml(self):
+        self.assertEqual(Path.home() / ".xurl" / "auth.yml", xurl_x.token_store_path())
 
 # ---------------------------------------------------------------------------
 # search_x

@@ -115,8 +115,14 @@ _TOKEN_STORE_MARKERS = (
 
 
 def token_store_path() -> Path:
-    """xurl's on-disk OAuth token store (~/.xurl)."""
-    return Path.home() / ".xurl"
+    """xurl's on-disk OAuth token store (~/.xurl/auth.yml).
+
+    Current xurl (>=1.1) stores credentials in a YAML file at
+    ``~/.xurl/auth.yml``; ``~/.xurl`` itself is a directory. Legacy
+    releases wrote a flat file at ``~/.xurl``. ``stored_auth_status()``
+    resolves both layouts; this returns the canonical current path.
+    """
+    return Path.home() / ".xurl" / "auth.yml"
 
 
 def stored_auth_status() -> Tuple[str, str]:
@@ -128,10 +134,22 @@ def stored_auth_status() -> Tuple[str, str]:
     AUTH_ERROR (store exists but cannot be read — surfaced as a typed
     error, not as "unconfigured").
     """
+    # Resolve the actual credential file across layouts. Current xurl keeps
+    # ~/.xurl/auth.yml inside the ~/.xurl directory; legacy installs wrote a
+    # flat ~/.xurl file. Honor whatever token_store_path() resolves to and
+    # check both shapes so a valid directory layout is never misread as a
+    # missing token store. Path stubs that cannot combine (e.g. an unreadable
+    # store stub without / support) still reach the typed error path below.
     path = token_store_path()
     try:
-        if not path.is_file():
-            return AUTH_MISSING, f"no token store at {path}"
+        is_dir = bool(path.is_dir())
+        candidates = [path / "auth.yml", path] if is_dir else [path, path / "auth.yml"]
+    except (AttributeError, TypeError, OSError):
+        candidates = [path]
+    path = next((c for c in candidates if c.is_file()), None)
+    try:
+        if path is None:
+            return AUTH_MISSING, f"no token store at {token_store_path()}"
         content = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         return (
