@@ -14,6 +14,7 @@ Priority: xAI API > Bird/GraphQL > xurl > web-only fallback
 import json
 import re
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -114,6 +115,45 @@ _TOKEN_STORE_MARKERS = (
 )
 
 
+def _is_file(path: Path) -> bool:
+    """True when *path* is a regular file; raise on an unreadable stat.
+
+    ``pathlib.Path.is_file()`` swallows ``OSError`` into ``False``, which
+    would silently misreport a permission-denied (EACCES) or broken-symlink
+    store as absent. Probing via ``stat`` keeps the typed ``AUTH_ERROR`` path
+    reachable for real stat failures. A missing path (``FileNotFoundError``)
+    returns False — absence is a normal state. Path stubs without
+    ``stat``/``is_file`` support (test doubles) fall back to their own
+    behavior.
+    """
+    try:
+        return stat.S_ISREG(path.stat().st_mode)
+    except FileNotFoundError:
+        return False
+    except (AttributeError, TypeError):
+        try:
+            return bool(path.is_file())
+        except AttributeError:
+            return False
+
+
+def _is_dir(path: Path) -> bool:
+    """True when *path* is a directory; raise on an unreadable stat.
+
+    Same rationale as :func:`_is_file` — pathlib's ``is_dir()`` hides
+    ``OSError``, so a permission-denied parent would read as a missing store.
+    """
+    try:
+        return stat.S_ISDIR(path.stat().st_mode)
+    except FileNotFoundError:
+        return False
+    except (AttributeError, TypeError):
+        try:
+            return bool(path.is_dir())
+        except AttributeError:
+            return False
+
+
 def token_store_path() -> Path:
     """xurl's on-disk OAuth token store (~/.xurl/auth.yml).
 
@@ -143,14 +183,33 @@ def stored_auth_status() -> Tuple[str, str]:
     path = token_store_path()
     try:
         base = path.parent if path.name == "auth.yml" else path
-        is_dir = bool(base.is_dir())
-        candidates = [base / "auth.yml", base] if is_dir else [base, base / "auth.yml"]
-    except (AttributeError, TypeError, OSError):
-        candidates = [path]
-    path = next((c for c in candidates if c.is_file()), None)
+    except (AttributeError, TypeError):
+        # A path stub with no parent/name support: treat it as the file itself.
+        base = path
     try:
-        if path is None:
-            return AUTH_MISSING, f"no token store at {token_store_path()}"
+        # Use stat rather than is_file()/is_dir(): pathlib swallows OSError
+        # into False, which would silently turn a permission-denied store into
+        # "no token store" instead of the typed AUTH_ERROR.
+        candidates = [base / "auth.yml", base] if _is_dir(base) else [base, base / "auth.yml"]
+    except (TypeError, AttributeError):
+        # A path stub that cannot combine (no __truediv__): the path itself is
+        # the only candidate.
+        candidates = [path]
+    except OSError as exc:
+        return (
+            AUTH_ERROR,
+            f"token store {base} unreadable: {type(exc).__name__}: {exc}",
+        )
+    try:
+        path = next(c for c in candidates if _is_file(c))
+    except StopIteration:
+        return AUTH_MISSING, f"no token store at {token_store_path()}"
+    except OSError as exc:
+        return (
+            AUTH_ERROR,
+            f"token store {base} unreadable: {type(exc).__name__}: {exc}",
+        )
+    try:
         content = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         return (

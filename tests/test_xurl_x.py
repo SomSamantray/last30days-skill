@@ -189,6 +189,21 @@ class TestStoredAuth(unittest.TestCase):
         self.assertEqual(xurl_x.AUTH_ERROR, status)
         self.assertIn("PermissionError", detail)
 
+    def test_permission_denied_read_reports_error_not_missing(self):
+        # Regression: a store that exists but cannot be read must report the
+        # typed AUTH_ERROR, not AUTH_MISSING. stat() on a chmod-000 file still
+        # succeeds on POSIX; read_text() is what raises PermissionError.
+        self.store.mkdir(exist_ok=True)
+        auth_yml = self.store / "auth.yml"
+        auth_yml.write_text("access_token: dummy-not-real\n", encoding="utf-8")
+        auth_yml.chmod(0)
+        try:
+            status, detail = self._status()
+            self.assertEqual(xurl_x.AUTH_ERROR, status)
+            self.assertIn("PermissionError", detail)
+        finally:
+            auth_yml.chmod(0o600)
+
     def test_directory_layout_has_stored_auth_with_binary(self):
         self.store.mkdir(exist_ok=True)
         (self.store / "auth.yml").write_text(
@@ -209,6 +224,32 @@ class TestStoredAuth(unittest.TestCase):
         ):
             status, _ = self._status()
         self.assertEqual(xurl_x.AUTH_OK, status)
+
+    def test_walk_up_canonical_path_finds_legacy_flat_file(self):
+        # token_store_path() returns the canonical ~/.xurl/auth.yml, but only
+        # the legacy flat ~/.xurl file exists. The parent-walk must find it.
+        self.store.write_text(
+            json.dumps({"bearer_token": {"bearer": "dummy-not-real"}}),
+            encoding="utf-8",
+        )
+        canonical = self.store / "auth.yml"
+        with mock.patch("lib.xurl_x.token_store_path", return_value=canonical):
+            status, detail = xurl_x.stored_auth_status()
+        self.assertEqual(xurl_x.AUTH_OK, status)
+        self.assertIn(str(self.store), detail)
+
+    def test_canonical_path_preferred_when_both_layouts_exist(self):
+        # A stale legacy flat ~/.xurl must never shadow the live auth.yml.
+        self.store.mkdir(exist_ok=True)
+        (self.store / "auth.yml").write_text(
+            "oauth2_tokens:\n  me:\n    oauth2:\n      access_token: live\n",
+            encoding="utf-8",
+        )
+        canonical = self.store / "auth.yml"
+        with mock.patch("lib.xurl_x.token_store_path", return_value=canonical):
+            status, detail = xurl_x.stored_auth_status()
+        self.assertEqual(xurl_x.AUTH_OK, status)
+        self.assertIn("auth.yml", detail)
 
     def test_legacy_json_store_with_bearer_token_is_ok(self):
         self.store.write_text(
