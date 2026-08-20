@@ -119,12 +119,12 @@ def _is_file(path: Path) -> bool:
     """True when *path* is a regular file; raise on an unreadable stat.
 
     ``pathlib.Path.is_file()`` swallows ``OSError`` into ``False``, which
-    would silently misreport a permission-denied (EACCES) or broken-symlink
-    store as absent. Probing via ``stat`` keeps the typed ``AUTH_ERROR`` path
-    reachable for real stat failures. A missing path (``FileNotFoundError``)
-    returns False — absence is a normal state. Path stubs without
-    ``stat``/``is_file`` support (test doubles) fall back to their own
-    behavior.
+    would silently misreport a permission-denied (EACCES) store as absent.
+    Probing via ``stat`` keeps the typed ``AUTH_ERROR`` path reachable for
+    real stat failures. A missing path (``FileNotFoundError``) returns False —
+    absence is a normal state (this also covers a dangling symlink whose
+    target is gone). Path stubs without ``stat``/``is_file`` support (test
+    doubles) fall back to their own behavior.
     """
     try:
         return stat.S_ISREG(path.stat().st_mode)

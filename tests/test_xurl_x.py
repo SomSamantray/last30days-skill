@@ -204,6 +204,27 @@ class TestStoredAuth(unittest.TestCase):
         finally:
             auth_yml.chmod(0o600)
 
+    def test_permission_denied_parent_stat_reports_error_not_missing(self):
+        # Regression: a store inside a non-searchable directory must report
+        # AUTH_ERROR, not AUTH_MISSING. stat() on the candidate inside a
+        # chmod-000 parent raises PermissionError, which must not be swallowed
+        # into "no token store" the way pathlib's is_file() would.
+        import os
+
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root bypasses permission checks")
+        self.store.mkdir(exist_ok=True)
+        (self.store / "auth.yml").write_text(
+            "access_token: dummy-not-real\n", encoding="utf-8"
+        )
+        self.store.chmod(0)
+        try:
+            status, detail = self._status()
+            self.assertEqual(xurl_x.AUTH_ERROR, status)
+            self.assertIn("PermissionError", detail)
+        finally:
+            self.store.chmod(0o700)
+
     def test_directory_layout_has_stored_auth_with_binary(self):
         self.store.mkdir(exist_ok=True)
         (self.store / "auth.yml").write_text(
