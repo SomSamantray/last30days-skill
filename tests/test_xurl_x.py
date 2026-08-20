@@ -154,6 +154,17 @@ class TestStoredAuth(unittest.TestCase):
         self.assertEqual(xurl_x.AUTH_MISSING, status)
         self.assertIn("no token store", detail)
 
+    def test_legacy_flat_file_layout_is_ok(self):
+        # When token_store_path() returns the canonical ~/.xurl/auth.yml but
+        # the legacy flat ~/.xurl file is what exists, still report OK.
+        self.store.write_text(
+            json.dumps({"bearer_token": {"bearer": "dummy-not-real"}}),
+            encoding="utf-8",
+        )
+        status, detail = self._status()
+        self.assertEqual(xurl_x.AUTH_OK, status)
+        self.assertIn(str(self.store), detail)
+
     def test_directory_layout_unreadable_auth_yml_is_error(self):
         self.store.mkdir(exist_ok=True)
         (self.store / "auth.yml").write_text(

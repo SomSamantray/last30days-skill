@@ -142,8 +142,9 @@ def stored_auth_status() -> Tuple[str, str]:
     # store stub without / support) still reach the typed error path below.
     path = token_store_path()
     try:
-        is_dir = bool(path.is_dir())
-        candidates = [path / "auth.yml", path] if is_dir else [path, path / "auth.yml"]
+        base = path.parent if path.name == "auth.yml" else path
+        is_dir = bool(base.is_dir())
+        candidates = [base / "auth.yml", base] if is_dir else [base, base / "auth.yml"]
     except (AttributeError, TypeError, OSError):
         candidates = [path]
     path = next((c for c in candidates if c.is_file()), None)
