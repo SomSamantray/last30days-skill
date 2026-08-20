@@ -193,6 +193,10 @@ class TestStoredAuth(unittest.TestCase):
         # Regression: a store that exists but cannot be read must report the
         # typed AUTH_ERROR, not AUTH_MISSING. stat() on a chmod-000 file still
         # succeeds on POSIX; read_text() is what raises PermissionError.
+        import os
+
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root bypasses permission checks")
         self.store.mkdir(exist_ok=True)
         auth_yml = self.store / "auth.yml"
         auth_yml.write_text("access_token: dummy-not-real\n", encoding="utf-8")
