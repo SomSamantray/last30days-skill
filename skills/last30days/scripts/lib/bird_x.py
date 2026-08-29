@@ -70,6 +70,7 @@ _SUBPROCESS_ENV_ALLOWLIST = (
     "NODE_ENV", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
     "NODE_TLS_REJECT_UNAUTHORIZED", "NODE_USE_ENV_PROXY",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
     # X session cookies the vendored client reads from the environment
     "AUTH_TOKEN", "CT0", "TWITTER_AUTH_TOKEN", "TWITTER_CT0",
     # Browser-cookie disable flag the client reads (cookies.js envFlagEnabled)

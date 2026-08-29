@@ -105,6 +105,12 @@ class TestSubprocessEnv(unittest.TestCase):
                 text,
             ):
                 reads.add(m.group(1) or m.group(2))
+            # cookies.js reads via helpers with the keys passed as arguments:
+            # envFlagEnabled('NAME') and readEnvCookie(cookies, ['A', 'B'], ...).
+            for m in re.finditer(r"envFlagEnabled\(\s*['\"]([A-Z0-9_]+)['\"]\s*\)", text):
+                reads.add(m.group(1))
+            for m in re.finditer(r"readEnvCookie\(\s*\w+\s*,\s*\[([^\]]*)\]", text):
+                reads.update(re.findall(r"['\"]([A-Z0-9_]+)['\"]", m.group(1)))
         self.assertTrue(reads, "vendored client env reads not found")
         allowlist = set(bird_x._SUBPROCESS_ENV_ALLOWLIST)
         uncovered = {
