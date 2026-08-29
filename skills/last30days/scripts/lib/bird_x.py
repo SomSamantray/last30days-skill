@@ -54,6 +54,26 @@ DEPTH_CONFIG = {
 # Module-level credentials injected from .env config
 _credentials: Dict[str, str] = {}
 
+# The vendored bird-search client reads exactly this env surface: runtime vars
+# the node subprocess needs (PATH for executable lookup, HOME for user caches,
+# NODE_ENV), the X session cookies it resolves from the environment
+# (cookies.js readEnvCookie), and its browser-cookie disable flag. Ambient
+# BIRD_* vars pass through as well. Everything else in os.environ - unrelated
+# API keys, tokens, .env contents - must not reach the scan-excluded vendored
+# client (issue #1063).
+_SUBPROCESS_ENV_ALLOWLIST = (
+    "PATH",
+    "HOME",
+    "NODE_ENV",
+    # X session cookies the vendored client reads from the environment
+    "AUTH_TOKEN",
+    "CT0",
+    "TWITTER_AUTH_TOKEN",
+    "TWITTER_CT0",
+    # Browser-cookie disable flag the client reads (cookies.js envFlagEnabled)
+    "LAST30DAYS_DISABLE_BROWSER_COOKIES",
+)
+
 
 def set_credentials(auth_token: Optional[str], ct0: Optional[str]):
     """Inject AUTH_TOKEN/CT0 from .env config so Node subprocesses can use them."""
@@ -74,8 +94,25 @@ def _has_process_credentials() -> bool:
 
 
 def _subprocess_env() -> Dict[str, str]:
-    """Build env dict for Node subprocesses, merging injected credentials."""
-    env = os.environ.copy()
+    """Build env dict for Node subprocesses, merging injected credentials.
+
+    The child env is limited to exactly the surface the vendored bird-search
+    client reads today (runtime vars, X session cookies, browser-cookie flags,
+    BIRD_* vars) plus the injected credentials. os.environ.copy() previously
+    handed every ambient variable - including unrelated API keys and tokens -
+    to scan-excluded vendored code (issue #1063); the allowlist shrinks the
+    blast radius to match the scan gap with no behavior change to the
+    ambient-credential lane.
+    """
+    env = {
+        name: os.environ[name]
+        for name in _SUBPROCESS_ENV_ALLOWLIST
+        if name in os.environ
+    }
+    env.update({
+        key: value for key, value in os.environ.items()
+        if key.startswith("BIRD_")
+    })
     env.update(_credentials)
     # Hard-disable browser-cookie fallback so normal pipeline runs never hit
     # Safari/Chrome Keychain prompts during source detection or search.
