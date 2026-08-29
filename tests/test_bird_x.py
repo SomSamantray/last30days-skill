@@ -84,6 +84,35 @@ class TestSubprocessEnv(unittest.TestCase):
         out = self._call(self._ambient(BIRD_FEATURES_PATH="/tmp/features.json"))
         self.assertEqual("/tmp/features.json", out.get("BIRD_FEATURES_PATH"))
 
+    def test_allowlist_covers_vendored_client_env_reads(self):
+        """Every process.env name the vendored client reads is reachable.
+
+        Guards the allowlist against vendor drift: a future bird-search bump
+        that reads a new non-BIRD_ env var must either be added to the
+        allowlist or fail here, keeping the child env surface explicit
+        (issue #1063).
+        """
+        import re
+
+        from lib import bird_x
+
+        vendor_dir = REPO_ROOT / "skills" / "last30days" / "scripts" / "lib" / "vendor" / "bird-search"
+        reads = set()
+        for path in list(vendor_dir.rglob("*.js")) + list(vendor_dir.rglob("*.mjs")):
+            text = path.read_text(encoding="utf-8")
+            for m in re.finditer(
+                r"process\.env\[\s*['\"]([A-Z0-9_]+)['\"]\s*\]|process\.env\.([A-Z0-9_]+)",
+                text,
+            ):
+                reads.add(m.group(1) or m.group(2))
+        self.assertTrue(reads, "vendored client env reads not found")
+        allowlist = set(bird_x._SUBPROCESS_ENV_ALLOWLIST)
+        uncovered = {
+            name for name in reads
+            if not name.startswith("BIRD_") and name not in allowlist
+        }
+        self.assertEqual(set(), uncovered)
+
 
 class TestBirdXEngagementZero(unittest.TestCase):
     def test_zero_likes_preserved(self):

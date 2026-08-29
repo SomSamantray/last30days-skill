@@ -54,22 +54,24 @@ DEPTH_CONFIG = {
 # Module-level credentials injected from .env config
 _credentials: Dict[str, str] = {}
 
-# The vendored bird-search client reads exactly this env surface: runtime vars
-# the node subprocess needs (PATH for executable lookup, HOME for user caches,
-# NODE_ENV), the X session cookies it resolves from the environment
-# (cookies.js readEnvCookie), and its browser-cookie disable flag. Ambient
+# The vendored bird-search client reads exactly this env surface, and the
+# node subprocess it spawns needs the node-runtime env (platform, locale,
+# TLS/proxy config) to run in every environment it runs in today. Ambient
 # BIRD_* vars pass through as well. Everything else in os.environ - unrelated
 # API keys, tokens, .env contents - must not reach the scan-excluded vendored
-# client (issue #1063).
+# client (issue #1063). Mirrors the platform-var surface grok_x keeps for its
+# node child (grok_x._subprocess_env).
 _SUBPROCESS_ENV_ALLOWLIST = (
-    "PATH",
-    "HOME",
-    "NODE_ENV",
+    # Runtime / platform vars the node subprocess needs (mirrors grok_x)
+    "PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "SystemRoot",
+    "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "SystemDrive", "COMSPEC",
+    "PATHEXT", "TEMP", "TMP",
+    # Node TLS / proxy / CA config for custom-CA and proxied environments
+    "NODE_ENV", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS",
+    "NODE_TLS_REJECT_UNAUTHORIZED", "NODE_USE_ENV_PROXY",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
     # X session cookies the vendored client reads from the environment
-    "AUTH_TOKEN",
-    "CT0",
-    "TWITTER_AUTH_TOKEN",
-    "TWITTER_CT0",
+    "AUTH_TOKEN", "CT0", "TWITTER_AUTH_TOKEN", "TWITTER_CT0",
     # Browser-cookie disable flag the client reads (cookies.js envFlagEnabled)
     "LAST30DAYS_DISABLE_BROWSER_COOKIES",
 )
@@ -96,13 +98,10 @@ def _has_process_credentials() -> bool:
 def _subprocess_env() -> Dict[str, str]:
     """Build env dict for Node subprocesses, merging injected credentials.
 
-    The child env is limited to exactly the surface the vendored bird-search
-    client reads today (runtime vars, X session cookies, browser-cookie flags,
-    BIRD_* vars) plus the injected credentials. os.environ.copy() previously
-    handed every ambient variable - including unrelated API keys and tokens -
-    to scan-excluded vendored code (issue #1063); the allowlist shrinks the
-    blast radius to match the scan gap with no behavior change to the
-    ambient-credential lane.
+    The child env is limited to the vendored client's env surface (see
+    ``_SUBPROCESS_ENV_ALLOWLIST``) plus injected credentials, so unrelated
+    ambient secrets never reach scan-excluded vendored code (issue #1063).
+    The ambient-credential lane behaves exactly as before.
     """
     env = {
         name: os.environ[name]
