@@ -2608,6 +2608,10 @@ def run(
                     # Do not re-fan-out against a host still inside its window.
                     with rate_limit_lock:
                         rate_limited_sources.add(source)
+            if isinstance(artifact, dict) and artifact.get("_sc_backstop_fired"):
+                artifact = dict(artifact)
+                artifact.pop("_sc_backstop_fired")
+                bundle.sc_backstop_fired.add(source)
             normalized = _normalize_score_dedupe(
                 source, raw_items, from_date, to_date,
                 freshness_mode=plan.freshness_mode,
@@ -4368,9 +4372,14 @@ def _retry_thin_sources(
             # pulls for ASINs already enriched in Phase 1. Finalize will enrich
             # any genuinely new products that weren't in Phase 1.
             skip_amazon_enrichment=True,
-            # Skip the SC search backstop on the phase-2b retry: the lane was
-            # already backfilled below the floor once this run (#977).
-            skip_sc_backstop=True,
+            # Skip the SC search backstop on the phase-2b retry only when phase
+            # 1 already fired it for this source (#977) - re-firing would
+            # double-spend SC credits. thin_sources is selected from the
+            # post-filter/dedup count, which can fall below the floor even when
+            # the raw yt-dlp count cleared it and the backstop correctly never
+            # fired in phase 1; in that case the retry must still be allowed to
+            # use it (#1009 review).
+            skip_sc_backstop=source in bundle.sc_backstop_fired,
         )
         outcome_note = artifact.get("_source_outcome") if isinstance(artifact, dict) else None
         detail_note = artifact.get("_source_outcome_detail") if isinstance(artifact, dict) else None
@@ -5205,21 +5214,35 @@ def _retrieve_stream_impl(
             youtube_yt.enrich_with_comments(
                 items, token=config.get("SCRAPECREATORS_API_KEY", ""),
             )
+        # Record that this run already attempted the backstop for this source,
+        # regardless of outcome, so a phase-2b retry never re-fires it (would
+        # double-spend SC credits) but also never withholds it from a source
+        # that never actually got the backstop in phase 1 (#1009 review: the
+        # thin-source check below uses the post-filter count, which can drop
+        # below the floor even when the raw yt-dlp count cleared it and the
+        # backstop correctly did not fire).
+        backstop_marker = {"_sc_backstop_fired": True} if backstop_fired else {}
         if youtube_failure:
             state = youtube_yt.classify_run_failure(youtube_failure)
             attempted = state != schema.SKIPPED_UNCONFIGURED
-            return items, _outcome_artifact(state, youtube_failure, attempted=attempted)
+            return items, {
+                **_outcome_artifact(state, youtube_failure, attempted=attempted),
+                **backstop_marker,
+            }
         if backstop_fired and free_items:
             # The below-floor lane was rescued or remained thin; record it as
             # partial so the report, saved raw file, and doctor postmortem do
             # not read the lane as clean (R3).
-            return items, _outcome_artifact(
-                schema.PARTIAL,
-                f"yt-dlp returned {len(free_items)} items (below the "
-                f"{_YT_SC_MIN_ITEMS}-item floor); backfilled with ScrapeCreators",
-                attempted=True,
-            )
-        return items, {}
+            return items, {
+                **_outcome_artifact(
+                    schema.PARTIAL,
+                    f"yt-dlp returned {len(free_items)} items (below the "
+                    f"{_YT_SC_MIN_ITEMS}-item floor); backfilled with ScrapeCreators",
+                    attempted=True,
+                ),
+                **backstop_marker,
+            }
+        return items, backstop_marker
     if source == "tiktok":
         # Use raw_topic so expand_tiktok_queries() generates diverse variants
         # from the original user topic, not the planner's narrowed search_query.

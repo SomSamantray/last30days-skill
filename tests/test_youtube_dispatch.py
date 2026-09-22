@@ -96,6 +96,22 @@ class TestThinnessFloorBackstop:
         sc_mock.assert_not_called()
         assert len(items) == 3
         assert "_source_outcome" not in artifact
+        # The backstop never fired, so a phase-2b retry must not be told to
+        # skip it (#1009 review: it would otherwise wrongly withhold the
+        # backstop from a source that never actually got it in phase 1).
+        assert "_sc_backstop_fired" not in artifact
+
+    def test_below_floor_marks_backstop_fired_for_retry_skip(self):
+        # When the backstop does fire, phase-2b must be told so it does not
+        # re-fire (double-spend) it on a retry of the same source.
+        _, artifact, _, _ = _run(self.KEY, [_item("a")], [_item("b"), _item("c")])
+        assert artifact["_sc_backstop_fired"] is True
+
+    def test_backstop_fired_marker_survives_backstop_failure(self):
+        # Even when the SC call itself throws, it was attempted this run, so
+        # a retry must still not re-fire it.
+        _, artifact, _, _ = _run(self.KEY, [_item("a")], sc_raises=True)
+        assert artifact["_sc_backstop_fired"] is True
 
     def test_zero_items_fires_backstop_silently(self, capsys):
         items, artifact, sc_mock, _ = _run(self.KEY, [], [_item("z")])
