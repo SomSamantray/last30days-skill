@@ -445,6 +445,43 @@ class TestGoogleSearchFallback(unittest.TestCase):
         self.assertEqual(1, len(result["items"]))
         self.assertEqual(1, len(detail_calls))
 
+    def test_expanded_queries_retry_a_failed_detail_within_the_budget(self):
+        from lib import http as http_module
+
+        not_found = http_module.HTTPError("HTTP 404: no reels", 404, "")
+        temporary_error = http_module.HTTPError("HTTP 503: unavailable", 503, "")
+        with (
+            patch.object(
+                instagram,
+                "expand_instagram_queries",
+                return_value=["first", "second"],
+            ),
+            patch.object(instagram, "fetch_captions", return_value={}),
+            patch.object(
+                http_module,
+                "get",
+                side_effect=[
+                    not_found,
+                    {"results": [{"url": "https://www.instagram.com/reel/ABC1020/"}]},
+                    temporary_error,
+                    not_found,
+                    {"results": [{"url": "https://instagram.com/reel/ABC1020"}]},
+                    self._post_payload(),
+                ],
+            ) as mock_http_get,
+        ):
+            result = instagram.search_and_enrich(
+                "AI automation", "2026-08-01", "2026-08-31",
+                depth="default", token="fake-token",
+            )
+
+        detail_calls = [
+            call for call in mock_http_get.call_args_list
+            if call.args[0].endswith("/v1/instagram/post")
+        ]
+        self.assertEqual(1, len(result["items"]))
+        self.assertEqual(2, len(detail_calls))
+
 
 class TestTranscriptTimeoutConfig(unittest.TestCase):
     """Tests for LAST30DAYS_TRANSCRIPT_TIMEOUT configuration.

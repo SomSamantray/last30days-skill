@@ -337,7 +337,7 @@ def _google_reel_fallback(
     from_date: str,
     to_date: str,
     budget: dict[str, int] | None = None,
-    detail_cache: dict[str, dict[str, Any] | None] | None = None,
+    detail_cache: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Discover Instagram reels through Google and fetch their post details."""
     if budget is None:
@@ -448,7 +448,9 @@ def _google_reel_fallback(
                 for shortcode, url in shortcode_urls.items()
             }
             for shortcode, future in futures.items():
-                detail_cache[shortcode] = future.result()
+                reel = future.result()
+                if reel:
+                    detail_cache[shortcode] = reel
 
     reels = []
     for shortcode in ordered_shortcodes:
@@ -465,7 +467,7 @@ def search_instagram(
     depth: str = "default",
     token: str = None,
     _fallback_budget: dict[str, int] | None = None,
-    _fallback_cache: dict[str, dict[str, Any] | None] | None = None,
+    _fallback_cache: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Search Instagram Reels via ScrapeCreators API.
 
@@ -709,7 +711,7 @@ def search_and_enrich(
     fallback_pages, fallback_posts = GOOGLE_FALLBACK_BUDGETS.get(
         depth, GOOGLE_FALLBACK_BUDGETS["default"]
     )
-    fallback_cache: dict[str, dict[str, Any] | None] = {}
+    fallback_cache: dict[str, dict[str, Any]] = {}
     for index, q in enumerate(queries):
         query_count = len(queries)
         query_budget = {
