@@ -113,7 +113,9 @@ class TestSearchRetryOn500(unittest.TestCase):
         """Multi-word query 500 -> retry with collapsed hashtag form."""
         from lib import http as http_module
         first_error = http_module.HTTPError("HTTP 500: Server Error", 500, "")
-        second_payload = {"reels": []}
+        second_payload = {
+            "reels": [{"id": "retry-result", "taken_at": "2026-04-15T12:00:00Z"}]
+        }
         with patch.object(http_module, "get") as mock_http_get:
             mock_http_get.side_effect = [first_error, second_payload]
             instagram.search_instagram(
@@ -145,7 +147,9 @@ class TestSearchRetryOn500(unittest.TestCase):
     def test_first_call_succeeds_no_retry(self):
         """200 on first call -> retry path is never entered."""
         from lib import http as http_module
-        ok_payload = {"reels": []}
+        ok_payload = {
+            "reels": [{"id": "search-result", "taken_at": "2026-04-15T12:00:00Z"}]
+        }
         with patch.object(http_module, "get") as mock_http_get:
             mock_http_get.return_value = ok_payload
             instagram.search_instagram(
@@ -165,6 +169,96 @@ class TestSearchRetryOn500(unittest.TestCase):
             mock_http_get.assert_not_called()
             self.assertIn("error", result)
             self.assertIn("SCRAPECREATORS_API_KEY", result["error"])
+
+
+class TestGoogleSearchFallback(unittest.TestCase):
+    """The Google-indexed post lane recovers when reels search is empty."""
+
+    def _post_payload(self):
+        return {
+            "data": {
+                "xdt_shortcode_media": {
+                    "id": "post-1020",
+                    "shortcode": "ABC1020",
+                    "taken_at_timestamp": 1786900800,
+                    "edge_media_to_caption": {
+                        "edges": [{"node": {"text": "AI automation for small business"}}]
+                    },
+                    "video_play_count": 900,
+                    "edge_media_preview_like": {"count": 80},
+                    "edge_media_to_parent_comment": {"count": 12},
+                    "owner": {"username": "creator1020"},
+                }
+            }
+        }
+
+    def test_404_search_falls_back_to_google_reel_urls_and_post_details(self):
+        from lib import http as http_module
+
+        not_found = http_module.HTTPError(
+            'HTTP 404: No scrapeable reels found for that query', 404, ""
+        )
+        with patch.object(
+            http_module,
+            "get",
+            side_effect=[
+                not_found,
+                {"results": [{"url": "https://www.instagram.com/reel/ABC1020/"}]},
+                self._post_payload(),
+            ],
+        ) as mock_http_get:
+            result = instagram.search_instagram(
+                "AI automation for small business",
+                "2026-08-01",
+                "2026-08-31",
+                depth="quick",
+                token="fake-token",
+            )
+
+        self.assertNotIn("error", result)
+        self.assertEqual(1, len(result["items"]))
+        item = result["items"][0]
+        self.assertEqual("post-1020", item["video_id"])
+        self.assertEqual("creator1020", item["author_name"])
+        self.assertEqual("AI automation for small business", item["text"])
+        self.assertEqual("2026-08-16", item["date"])
+        self.assertEqual(
+            {"views": 900, "likes": 80, "comments": 12}, item["engagement"]
+        )
+        self.assertEqual(3, mock_http_get.call_count)
+        google_call = mock_http_get.call_args_list[1]
+        self.assertEqual(
+            "site:instagram.com/reel ai automation for small business",
+            google_call.kwargs["params"]["query"],
+        )
+        post_call = mock_http_get.call_args_list[2]
+        self.assertEqual(
+            "https://www.instagram.com/reel/ABC1020/",
+            post_call.kwargs["params"]["url"],
+        )
+
+    def test_empty_reels_search_uses_google_fallback(self):
+        from lib import http as http_module
+
+        with patch.object(
+            http_module,
+            "get",
+            side_effect=[
+                {"reels": []},
+                {"results": [{"url": "https://www.instagram.com/reel/ABC1020/"}]},
+                self._post_payload(),
+            ],
+        ) as mock_http_get:
+            result = instagram.search_instagram(
+                "AI automation for small business",
+                "2026-08-01",
+                "2026-08-31",
+                depth="quick",
+                token="fake-token",
+            )
+
+        self.assertEqual(1, len(result["items"]))
+        self.assertEqual(3, mock_http_get.call_count)
 
 
 class TestTranscriptTimeoutConfig(unittest.TestCase):
@@ -262,7 +356,10 @@ class TestInstagramArabicTopicEncoding(unittest.TestCase):
         resp = MagicMock()
         resp.__enter__ = MagicMock(return_value=resp)
         resp.__exit__ = MagicMock(return_value=False)
-        resp.read.return_value = b'{"reels": []}'
+        resp.read.return_value = (
+            b'{"reels": [{"id": "arabic-result", '
+            b'"taken_at": "2026-06-10T00:00:00Z"}]}'
+        )
         resp.status = 200
         mock_urlopen.return_value = resp
 
