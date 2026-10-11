@@ -233,10 +233,11 @@ class TestGoogleSearchFallback(unittest.TestCase):
         self.assertEqual(3, mock_http_get.call_count)
         google_call = mock_http_get.call_args_list[1]
         self.assertEqual(
-            "site:instagram.com/reel ai automation for small business",
+            "site:instagram.com/reel ai automation for small business "
+            "after:2026-08-01 before:2026-09-01",
             google_call.kwargs["params"]["query"],
         )
-        self.assertEqual("last-month", google_call.kwargs["params"]["date_posted"])
+        self.assertNotIn("date_posted", google_call.kwargs["params"])
         self.assertEqual(1, google_call.kwargs["params"]["page"])
         post_call = mock_http_get.call_args_list[2]
         self.assertEqual(
@@ -408,6 +409,41 @@ class TestGoogleSearchFallback(unittest.TestCase):
         self.assertEqual(
             [1, 1], [call.kwargs["params"]["page"] for call in google_calls]
         )
+
+    def test_expanded_queries_fetch_each_reel_shortcode_once(self):
+        from lib import http as http_module
+
+        not_found = http_module.HTTPError("HTTP 404: no reels", 404, "")
+        with (
+            patch.object(
+                instagram,
+                "expand_instagram_queries",
+                return_value=["first", "second"],
+            ),
+            patch.object(instagram, "fetch_captions", return_value={}),
+            patch.object(
+                http_module,
+                "get",
+                side_effect=[
+                    not_found,
+                    {"results": [{"url": "https://www.instagram.com/reel/ABC1020/"}]},
+                    self._post_payload(),
+                    not_found,
+                    {"results": [{"url": "https://instagram.com/reel/ABC1020"}]},
+                ],
+            ) as mock_http_get,
+        ):
+            result = instagram.search_and_enrich(
+                "AI automation", "2026-08-01", "2026-08-31",
+                depth="default", token="fake-token",
+            )
+
+        detail_calls = [
+            call for call in mock_http_get.call_args_list
+            if call.args[0].endswith("/v1/instagram/post")
+        ]
+        self.assertEqual(1, len(result["items"]))
+        self.assertEqual(1, len(detail_calls))
 
 
 class TestTranscriptTimeoutConfig(unittest.TestCase):
