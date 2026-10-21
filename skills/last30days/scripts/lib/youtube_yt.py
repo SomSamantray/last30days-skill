@@ -82,8 +82,8 @@ _ytdlp_slots = threading.Semaphore(_YTDLP_MAX_CONCURRENT)
 # every entity sub-run; cache hits avoid the redundant expensive --dump-json work.
 # Inflight coalescing prevents N concurrent identical searches from all missing
 # the cache and stampeding YouTube together.
-_search_cache: Dict[Tuple[str, int, str], Dict[str, Any]] = {}
-_search_inflight: Dict[Tuple[str, int, str], tuple[threading.Event, list]] = {}
+_search_cache: Dict[Tuple[str, int, str, str, Optional[str]], Dict[str, Any]] = {}
+_search_inflight: Dict[Tuple[str, int, str, str, Optional[str]], tuple[threading.Event, list]] = {}
 _search_cache_lock = threading.Lock()
 # Comments are enrichment, not core evidence: keep the budget tight so a slow
 # comment API can never dominate a run's wall clock (bounded to 3 videos).
@@ -198,7 +198,7 @@ def _run_ytdlp(cmd: List[str], *, timeout: float) -> subproc.SubprocResult:
 
 
 def _claim_search_slot(
-    cache_key: Tuple[str, int, str],
+    cache_key: Tuple[str, int, str, str, Optional[str]],
 ) -> tuple[Optional[Dict[str, Any]], Optional[threading.Event], Optional[list], bool]:
     """Return ``(cached, event, slot, is_leader)`` for search coalesce.
 
@@ -220,7 +220,7 @@ def _claim_search_slot(
 
 
 def _finish_search_slot(
-    cache_key: Tuple[str, int, str],
+    cache_key: Tuple[str, int, str, str, Optional[str]],
     payload: Dict[str, Any],
     *,
     event: threading.Event,
@@ -401,6 +401,19 @@ def _inject_youtube_player_client(cmd: List[str]) -> List[str]:
     return out
 
 
+def _ytdlp_proxy() -> Optional[str]:
+    """Return the proxy URL for yt-dlp, or None when unset.
+
+    Set ``YOUTUBE_PROXY`` (or ``YT_PROXY``) to any proxy URL that yt-dlp
+    accepts: ``socks5://127.0.0.1:1080``, ``http://proxy:3128``, etc.
+    ``YOUTUBE_PROXY`` takes precedence over ``YT_PROXY``.  Only routes
+    yt-dlp traffic through the proxy — other HTTP requests the skill makes
+    are unaffected (use ``HTTP_PROXY`` / ``HTTPS_PROXY`` for those).
+    """
+    proxy = os.environ.get("YOUTUBE_PROXY", "").strip() or os.environ.get("YT_PROXY", "").strip()
+    return proxy or None
+
+
 def _wrap_ytdlp_cmd(cmd: List[str]) -> List[str]:
     """Wrap a yt-dlp command list with `ssh <host>` when SSH routing is set.
 
@@ -410,6 +423,9 @@ def _wrap_ytdlp_cmd(cmd: List[str]) -> List[str]:
     LAST30DAYS_YOUTUBE_SSH_HOST were ever set to a value starting with `-`.
     """
     cmd = _inject_youtube_player_client(cmd)
+    proxy = _ytdlp_proxy()
+    if proxy:
+        cmd = list(cmd) + ["--proxy", proxy]
     host = _ytdlp_ssh_host()
     if not host:
         return cmd
@@ -480,11 +496,46 @@ def expand_youtube_queries(topic: str, depth: str) -> List[str]:
     return queries[:cap]
 
 
+# Freshness modes where an out-of-window video is noise, not a fallback: a
+# recent topic with no in-range videos returns an honest empty result rather
+# than years-old, often off-topic matches.
+_RECENT_FRESHNESS_MODES = frozenset({"strict_recent", "balanced_recent"})
+
+
+def _apply_date_window(
+    items: List[Dict[str, Any]],
+    from_date: str,
+    to_date: str,
+    freshness_mode: Optional[str],
+) -> List[Dict[str, Any]]:
+    """Prefer in-window videos; scope the keep-all fallback by freshness mode.
+
+    Videos published after ``to_date`` (an --as-of window) are never kept.
+    3+ in-window videos: keep only those (every mode). Fewer: recent modes
+    keep only the in-window ones; evergreen_ok and unknown/None keep all so
+    evergreen topics can still fall back to older videos.
+    """
+    items = [i for i in items if not (i["date"] and i["date"] > to_date)]
+    recent = [i for i in items if i["date"] and i["date"] >= from_date]
+    if len(recent) >= 3:
+        _log(f"Found {len(recent)} videos within date range")
+        return recent
+    if freshness_mode in _RECENT_FRESHNESS_MODES:
+        _log(
+            f"Found {len(items)} videos ({len(recent)} within date range, "
+            f"keeping only in-range for {freshness_mode})"
+        )
+        return recent
+    _log(f"Found {len(items)} videos ({len(recent)} within date range, keeping all)")
+    return items
+
+
 def search_youtube(
     topic: str,
     from_date: str,
     to_date: str,
     depth: str = "default",
+    freshness_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Search YouTube via yt-dlp. No API key needed.
 
@@ -493,6 +544,8 @@ def search_youtube(
         from_date: Start date (YYYY-MM-DD)
         to_date: End date (YYYY-MM-DD)
         depth: 'quick', 'default', or 'deep'
+        freshness_mode: Plan freshness mode; scopes the out-of-window
+            fallback (see _apply_date_window). None keeps the soft fallback.
 
     Returns:
         Dict with 'items' list of video metadata dicts.
@@ -502,7 +555,7 @@ def search_youtube(
 
     count = DEPTH_CONFIG.get(depth, DEPTH_CONFIG["default"])
     core_topic = _extract_core_subject(topic)
-    cache_key = (core_topic, count, from_date)
+    cache_key = (core_topic, count, from_date, to_date, freshness_mode)
     timeout = _search_timeout()
 
     cached, event, slot, is_leader = _claim_search_slot(cache_key)
@@ -609,13 +662,9 @@ def search_youtube(
                 "description": description,
             })
 
-        # Soft date filter: prefer recent items but fall back to all if too few
-        recent = [i for i in items if i["date"] and i["date"] >= from_date]
-        if len(recent) >= 3:
-            items = recent
-            _log(f"Found {len(items)} videos within date range")
-        else:
-            _log(f"Found {len(items)} videos ({len(recent)} within date range, keeping all)")
+        # Date filter: prefer recent items; the keep-all fallback is scoped
+        # by freshness mode (evergreen only), see _apply_date_window.
+        items = _apply_date_window(items, from_date, to_date, freshness_mode)
 
         # Sort by views descending
         items.sort(key=lambda x: x["engagement"]["views"], reverse=True)
@@ -774,11 +823,14 @@ def _fetch_transcript_ytdlp_via_ssh(video_id: str, ssh_host: str) -> Optional[st
         if client
         else ""
     )
+    proxy = _ytdlp_proxy()
+    proxy_flag = f"--proxy {shlex.quote(proxy)} " if proxy else ""
     remote_script = (
         "set -e; "
         "TMPD=$(mktemp -d); "
         "yt-dlp --ignore-config --no-cookies-from-browser "
         f"{extractor}"
+        f"{proxy_flag}"
         f"--write-auto-subs --sub-lang {sub_langs} --sub-format vtt "
         "--skip-download --no-warnings "
         f'-o "$TMPD/%(id)s" {quoted_url} >/dev/null 2>&1 || true; '
@@ -900,6 +952,9 @@ def _fetch_transcript_ytdlp(
         f"https://www.youtube.com/watch?v={video_id}",
     ]
     cmd = _inject_youtube_player_client(cmd)
+    proxy = _ytdlp_proxy()
+    if proxy:
+        cmd = list(cmd) + ["--proxy", proxy]
 
     timeout = _transcript_fast_timeout() if fast_fail else _TRANSCRIPT_TIMEOUT
     attempts = 1 if fast_fail else _TRANSCRIPT_MAX_RETRIES + 1
@@ -1226,6 +1281,7 @@ def search_and_transcribe(
     to_date: str,
     depth: str = "default",
     token: Optional[str] = None,
+    freshness_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Full YouTube search: find videos, then fetch transcripts for top results.
 
@@ -1239,6 +1295,7 @@ def search_and_transcribe(
         depth: 'quick', 'default', or 'deep'
         token: Optional ScrapeCreators key for the per-video transcript
             fallback (threaded to fetch_transcripts_parallel).
+        freshness_mode: Plan freshness mode, threaded to search_youtube().
 
     Returns:
         Dict with 'items' list. Each item has a 'transcript_snippet' field.
@@ -1249,7 +1306,9 @@ def search_and_transcribe(
     items: List[Dict[str, Any]] = []
     search_error: Optional[str] = None
     for q in queries:
-        search_result = search_youtube(q, from_date, to_date, depth)
+        search_result = search_youtube(
+            q, from_date, to_date, depth, freshness_mode=freshness_mode,
+        )
         err = search_result.get("error")
         if err:
             search_error = _prefer_search_error(search_error, str(err))
@@ -1558,6 +1617,7 @@ def search_youtube_sc(
     depth: str = "default",
     token: str = None,
     skip_transcript_ids: Optional[Set[str]] = None,
+    freshness_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Search YouTube via ScrapeCreators when yt-dlp is absent, empty, or thin.
 
@@ -1571,6 +1631,8 @@ def search_youtube_sc(
         depth: 'quick', 'default', or 'deep'
         token: ScrapeCreators API key
         skip_transcript_ids: Video IDs already transcribed by the free search
+        freshness_mode: Plan freshness mode; scopes the out-of-window
+            fallback (see _apply_date_window). None keeps the soft fallback.
 
     Returns:
         Dict with 'items' list of video metadata dicts.
@@ -1629,13 +1691,8 @@ def search_youtube_sc(
             "description": description,
         })
 
-    # Soft date filter
-    recent = [i for i in items if i["date"] and i["date"] >= from_date]
-    if len(recent) >= 3:
-        items = recent
-        _log(f"Found {len(items)} videos within date range")
-    else:
-        _log(f"Found {len(items)} videos ({len(recent)} within date range, keeping all)")
+    # Date filter (keep-all fallback scoped by freshness mode)
+    items = _apply_date_window(items, from_date, to_date, freshness_mode)
 
     # Sort by views
     items.sort(key=lambda x: x["engagement"]["views"], reverse=True)

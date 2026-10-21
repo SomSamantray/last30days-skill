@@ -9,6 +9,62 @@ This project uses [towncrier](https://towncrier.readthedocs.io/). Upcoming notes
 
 <!-- towncrier release notes start -->
 
+## [3.28.1] - 2026-10-20
+
+### Added
+
+- Add `YOUTUBE_PROXY` (alias `YT_PROXY`) env var: when set, passes `--proxy <url>` to all yt-dlp invocations in `youtube_yt.py` (`search_youtube` and `fetch_transcript`), routing only yt-dlp traffic through the proxy. Useful in regions where YouTube is blocked. Documented in CONFIGURATION.md under "YouTube proxy". ([#158](https://github.com/mvanhorn/last30days-skill/issues/158))
+
+### Fixed
+
+- Render the engine footer as a fenced text block so Markdown does not turn `---` into horizontal rules. ([#706](https://github.com/mvanhorn/last30days-skill/issues/706))
+- GitHub searches skip qualifier-only topics with malformed or nested wrappers instead of sending punctuation-only queries. Topics containing real search text keep their existing punctuation. ([#969](https://github.com/mvanhorn/last30days-skill/issues/969))
+- Authenticated Bluesky searches now send RFC3339 date-time bounds, preventing valid date windows from being rejected as malformed requests. ([#984](https://github.com/mvanhorn/last30days-skill/issues/984))
+- Remove "LAW N" framing from model-visible render output: the SYNTHESIS CONTRACT, EVIDENCE FOR SYNTHESIS envelope, and DEGRADED RUN WARNING now use plain descriptive guidance instead of numbered law references. ([#1082](https://github.com/mvanhorn/last30days-skill/issues/1082))
+- The MCP launcher now finds and verifies Python 3.12+ interpreters on PATH when the default python3 is too old. Set LAST30DAYS_PYTHON to select a specific interpreter; invalid explicit choices report an error instead of silently falling back. ([#1140](https://github.com/mvanhorn/last30days-skill/issues/1140))
+- xAI: change the default model from `grok-4-1-fast`, which xAI no longer lists, to `grok-4.20-0309-non-reasoning`. The same default (`XAI_DEFAULT`) drives the xAI X search backend and the xAI planner and rerank models when `LAST30DAYS_REASONING_PROVIDER=xai`, unless `LAST30DAYS_X_MODEL` or `LAST30DAYS_PLANNER_MODEL` / `LAST30DAYS_RERANK_MODEL` pin another model. `CONFIGURATION.md` now documents `LAST30DAYS_X_MODEL` next to `XAI_API_KEY`. ([#1186](https://github.com/mvanhorn/last30days-skill/issues/1186))
+- Reddit comment parsing now matches shreddit attribute names case-insensitively, so markup that carries `thingid` instead of `thingId` no longer yields zero comments. ([#1256](https://github.com/mvanhorn/last30days-skill/issues/1256))
+- Digg now reports an error instead of "no results" when `digg-pp-cli` falls back to its local store after a failed live search (last30days never runs `digg-pp-cli sync`, so the fallback store is always empty). ([#1281](https://github.com/mvanhorn/last30days-skill/issues/1281))
+- Hacker News top comments now follow the thread's display order from the official HN item API instead of Algolia's oldest-first order, so quoted comments are the ones HN ranks highest. If that lookup fails, comments keep the previous order and the Hacker News source is not marked degraded. ([#1285](https://github.com/mvanhorn/last30days-skill/issues/1285))
+- GitHub keyword searches now stop at the research window end, so an `--as-of` run no longer spends its result slots on issues created after the window and then drops them.
+- GitHub person mode (`--github-user`) now counts PRs created inside the research window only, so an `--as-of` run no longer reports every PR up to today, and its velocity summary names the real window length instead of always saying 30 days.
+- Live-edit setup guidance now preserves the installed skill as a backup before replacing its real directory with a working-tree symlink, so development edits reach the active skill.
+- Sources named in `--search` are no longer dropped by intent routing at default and deep depth (for example, Polymarket on a topic classified as a concept or how-to).
+- YouTube no longer keeps videos published after the end of an `--as-of` window, so a historical report cannot cite later videos or spend its transcript budget on them. Cached and concurrent searches use the complete date window, including its inclusive end date.
+- arXiv no longer returns papers published after the end of an `--as-of` window, and its one-year recency cutoff is now measured from that end date, so historical reports keep in-window papers instead of citing later ones.
+- dev.to now finds articles for research windows that end before today. It pages back through newer results within a 45-second budget, keeps only articles inside the window, and includes the whole first day of every window.
+
+
+## [3.28.0] - 2026-10-11
+
+### Security
+
+- Cached research reports and the GitHub sign-in handle are now written with owner-only permissions on macOS and Linux. Hosted research through `LAST30DAYS_API_BASE` now requires HTTPS, except for loopback addresses.
+
+### Added
+
+- Added a security policy (`SECURITY.md`) that explains how to report vulnerabilities privately through GitHub security advisories and documents what the skill sends over the network, which credentials and browser cookies it reads, what it installs, and what it stores locally. ([#565](https://github.com/mvanhorn/last30days-skill/issues/565))
+- Added dev.to as a free, keyless source. When you research a software or developer topic, the skill infers dev.to tags and adds dev.to articles ranked by reactions and comments, with top comments from the leading articles. It stays off for other topics, and `INCLUDE_SOURCES=devto` turns it on for every run.
+
+### Fixed
+
+- A host-supplied query plan now searches only the sources it names: company topics no longer get an unrequested jobs lane added to it. A plan that names jobs keeps jobs on any topic, and hiring-signals mode with a host plan runs the jobs lane instead of failing with "No available planned sources remain".
+- A multi-subquery run now fetches each identical TikTok, Instagram, YouTube, and X search once instead of once per subquery, and the thin-source retry reuses a clean result instead of repeating the request. Polymarket and Digg no longer run the same search twice when the thin-source retry's simplified query matches the planner's. Failed fetches are not reused, so the retry still makes a real second attempt.
+- Corrected the configuration reference to describe ScrapeCreators' GitHub device-code signup, TikTok and Instagram availability with a ScrapeCreators key, and the DuckDuckGo → Startpage → optional SearXNG search fallback. Removed the unsupported Apify fallback claim and documented YouTube SSH routing, including its prerequisites and limits.
+- Fixed `--github-repo` project mode silently dropping the pinned repo when its newest GitHub release is older than the research window (Ghostty's newest release object is a 2022 nightly). The repo snapshot is now dated to the window end unless that release falls inside the window, so the live star count reaches the report and Source Coverage no longer shows "GitHub: 0 items (no results)" after the engine logged a project-mode result. A snapshot dated this way ranks on neutral freshness (the 10-90 scale midpoint) instead of maximum freshness, so the pinned repo card no longer sorts to #1 in every report; a repo whose newest release is inside the window keeps normal freshness.
+- Fixed first-run setup to find signed-in Opera sessions on macOS when you approve browser-cookie access, before trying Firefox and Safari.
+- Fixed the engine footer printing "15 storys" for Hacker News; it now reads "15 stories" (and "1 story"). Footer nouns ending in a consonant followed by "y" now pluralize to "ies".
+- Hacker News comment quotes now link to the comment itself (or the HN discussion page when the comment id is missing) instead of the story's article URL.
+- Hacker News: when the same article was submitted to HN more than once, the engine merged the submissions and showed one story's id with another story's comment count and comments. Each HN submission now keeps its own points, comment count, discussion link, and comments, and a ranked card's evidence text comes from the same submission whose numbers it shows; submissions of the same article still cluster together.
+- Ranking without an LLM reranker now weighs real engagement: a 380-point Hacker News story no longer ranks below 3-point stories just because they are newer. Relevance is still judged by word overlap with the topic, so a well-upvoted post whose title barely matches can still rank below weaker posts that repeat the topic words. Engagement is scored on an absolute per-platform scale instead of within each search's own results, freshness is counted once, the low-score cliff applies only to LLM-scored results, and first-party posts are lifted only when they are on topic (or the handle is the topic itself). The "All Items" list now shows real scores instead of 0 or 1. GitHub repo cards no longer count lifetime stars as engagement or take first-party credit, and YouTube, TikTok, and Instagram engagement is scored on a view scale so a few-hundred-view video no longer rates like a well-upvoted thread.
+- Recent-topic reports no longer include years-old YouTube videos when nothing on YouTube falls inside the date window; the YouTube section now comes back empty instead of padding the report with off-topic back-catalog videos. Evergreen and how-to topics still fall back to older videos when recent ones are scarce.
+
+
+## [3.27.3] - 2026-10-11
+
+No significant changes.
+
+
 ## [3.27.2] - 2026-10-09
 
 ### Security

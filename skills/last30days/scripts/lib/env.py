@@ -694,7 +694,7 @@ def get_config(policy: ConfigLoadPolicy | None = None) -> dict[str, Any]:
         # Bright Data CLI. Optional: the CLI normally owns its own auth via
         # `brightdata login`, so this only matters for users who prefer an
         # explicit key in a `.env` file or the keychain. Registered here so
-        # those layers reach the gate and the subprocess (-k) alike.
+        # those layers reach the gate and the subprocess environment alike.
         ('BRIGHTDATA_API_KEY', None),
         # Amazon marketplace the amazon source searches. Non-US users point
         # this at their own storefront (e.g. https://www.amazon.co.uk).
@@ -739,6 +739,10 @@ def get_config(policy: ConfigLoadPolicy | None = None) -> dict[str, Any]:
         # follow-up command. New writes use LAST30DAYS_REGISTER=eli5.
         ('ELI5_MODE', None),
         ('LAST30DAYS_YOUTUBE_SSH_HOST', None),
+        # Proxy for yt-dlp; YT_PROXY is the short alias. Only routes yt-dlp
+        # traffic — does not affect other HTTP calls the skill makes.
+        ('YOUTUBE_PROXY', None),
+        ('YT_PROXY', None),
         ('LAST30DAYS_REPORT_CACHE_TTL_SECONDS', None),
         ('LAST30DAYS_VERIFY_FRESHNESS', None),
         ('LAST30DAYS_TRANSCRIPT_TIMEOUT', None),

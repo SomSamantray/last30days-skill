@@ -148,6 +148,16 @@ class TestSearchGithub(unittest.TestCase):
         self.assertEqual(item["engagement"]["comments"], 12)
         self.assertFalse(item["metadata"]["is_pr"])
 
+    @patch.object(github, "_fetch_json", return_value={"items": []})
+    @patch.object(github, "_resolve_token", return_value="test-token")
+    def test_search_is_bounded_by_window_end(self, mock_token, mock_fetch):
+        """An --as-of window must not fetch issues created after its end date."""
+        github.search_github("react", "2026-05-31", "2026-06-30")
+        self.assertTrue(mock_fetch.call_args_list)
+        for call in mock_fetch.call_args_list:
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(call.args[0]).query)["q"][0]
+            self.assertIn("created:2026-05-31..2026-06-30", q)
+
     @patch.object(github, "_fetch_json", return_value=None)
     @patch.object(github, "_resolve_token", return_value="test-token")
     def test_rate_limit_returns_empty_envelope(self, mock_token, mock_fetch):
@@ -511,6 +521,40 @@ class TestPersonPushEventsLane(unittest.TestCase):
         self.assertEqual(items[0]["metadata"]["event_id"], "2")
 
 
+class TestPersonVelocityWindow(unittest.TestCase):
+    """Person-mode PR counts must cover the requested window, not up to today."""
+
+    def _run(self, from_date, to_date):
+        queries = []
+
+        def fetch(url, **kwargs):
+            if "search/issues" in url:
+                queries.append(
+                    urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["q"][0]
+                )
+                return {"total_count": 4, "items": []}
+            return []
+
+        with patch.object(github, "_resolve_token", return_value="t"), \
+                patch.object(github, "_fetch_json", side_effect=fetch):
+            items = github.search_github_person("kurt", from_date, to_date, token="t")
+        return queries, items
+
+    def test_pr_searches_end_at_window_end(self):
+        queries, _ = self._run("2026-05-31", "2026-06-30")
+
+        self.assertEqual(len(queries), 2)
+        for q in queries:
+            self.assertIn("created:2026-05-31..2026-06-30", q)
+            self.assertEqual(q.count("created:"), 1)
+
+    def test_velocity_label_uses_window_length(self):
+        _, items = self._run("2026-07-16", "2026-10-14")
+
+        self.assertIn("CONTRIBUTION VELOCITY (last 90 days)", items[0]["snippet"])
+
+
+
 class TestStripSearchQualifiers(unittest.TestCase):
     """Planner-injected GitHub search qualifiers must never reach the query
     builder: search_github appends its own created:>{from_date}, and two
@@ -589,11 +633,22 @@ class TestStripSearchQualifiers(unittest.TestCase):
         )
 
     def test_missing_closer_qualifier_still_stripped(self):
-        # An opener without its closer ("(created:>2025-03-20") must not leak
-        # the qualifier into the query: only the stray opener survives, and the
-        # collision class (#949) stays dead.
-        result = github.strip_search_qualifiers("(created:>2025-03-20")
-        self.assertNotIn("created:", result)
+        self.assertEqual(
+            github.strip_search_qualifiers("(created:>2025-03-20"), "",
+        )
+
+    def test_wrapper_cleanup_preserves_real_topic_text(self):
+        for topic, expected in [
+            ("ai (foo", "ai (foo"),
+            ("ai (foo created:>2025-03-20", "ai (foo"),
+            ("(foo) created:>2025-03-20", "(foo)"),
+            ('"quoted topic" created:>2025-03-20', '"quoted topic"'),
+            ("([foo created:>2025-03-20", "([foo"),
+            ("(", "("),
+            (")", ")"),
+        ]:
+            with self.subTest(topic=topic):
+                self.assertEqual(github.strip_search_qualifiers(topic), expected)
 
     def test_quote_wrapped_with_space_inside_does_not_leak_qualifier(self):
         # '"created:>2025-03-20 abc"' has a space in the quoted value, so it is
@@ -684,7 +739,7 @@ class TestSearchGithubQualifiers(unittest.TestCase):
         # rather than against a single exact string.
         self.assertEqual(len(queries), 2)
         for q in queries:
-            self.assertTrue(q.startswith("open source ai created:>2026-07-01"))
+            self.assertTrue(q.startswith("open source ai created:2026-07-01..2026-07-31"))
             self.assertEqual(q.count("created:"), 1)
             self.assertNotIn("stars:", q)
         self.assertEqual(
@@ -794,7 +849,7 @@ class TestSearchGithubQualifiers(unittest.TestCase):
             )
         q = self._query(captured["url"])
         self.assertEqual(q.count("created:"), 1)
-        self.assertIn("created:>2026-07-01", q)
+        self.assertIn("created:2026-07-01..2026-07-31", q)
         self.assertNotIn("created:>2025-03-20", q)
 
     @patch.object(github, "_resolve_token", return_value="test-token")
@@ -831,9 +886,9 @@ class TestSearchGithubQualifiers(unittest.TestCase):
         queries = [self._query(u) for u in captured["urls"]]
         self.assertEqual(len(queries), 2)
         for q in queries:
-            self.assertTrue(q.startswith("open source ai created:>2026-07-01"))
+            self.assertTrue(q.startswith("open source ai created:2026-07-01..2026-07-31"))
             self.assertEqual(q.count("created:"), 1)
-            self.assertIn("created:>2026-07-01", q)
+            self.assertIn("created:2026-07-01..2026-07-31", q)
             self.assertNotIn("created:>2025-03-20", q)
             self.assertIn("open source", q)
             self.assertIn("ai", q)
@@ -858,3 +913,66 @@ class TestSearchGithubQualifiers(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_snapshot_date_uses_in_window_release_else_window_end():
+    from lib import github
+
+    window = ("2026-09-11", "2026-10-11")
+    assert github._snapshot_date([{"date": "2026-10-05"}], *window) == "2026-10-05"
+    assert github._snapshot_date([{"date": "2022-11-17"}], *window) == "2026-10-11"
+    assert github._snapshot_date([], *window) == "2026-10-11"
+    assert github._snapshot_date([{"date": None}], *window) == "2026-10-11"
+
+
+def _project_mode_items(release_date):
+    from lib import github
+
+    enrichment = {
+        "info": {"stars": 40000, "open_issues": 900, "description": "A terminal", "language": "Zig"},
+        "readme": "Ghostty terminal",
+        "releases": [{"name": "tip", "date": release_date, "body": ""}],
+        "top_issues": {},
+    }
+    with patch.object(github, "_resolve_token", return_value="t"), \
+            patch.object(github, "_enrich_project_repo", return_value=enrichment):
+        return github.search_github_project(
+            ["ghostty-org/ghostty"], "2026-09-11", "2026-10-11",
+        )
+
+
+def test_snapshot_repo_gets_neutral_freshness_not_window_end_boost():
+    # A pinned repo whose newest release predates the window is dated to_date
+    # so the date filter keeps it. That date is a read time, not an event: it
+    # must rank on neutral freshness, not pin to #1 on maximum freshness.
+    from lib import normalize, signals
+
+    window = ("2026-09-11", "2026-10-11")
+    raw = _project_mode_items("2022-11-17") + [{
+        "id": "GH9",
+        "title": "ghostty-org/ghostty issue",
+        "url": "https://github.com/ghostty-org/ghostty/issues/1",
+        "date": "2026-09-26",
+        "source": "github",
+        "relevance": 0.9,
+        "metadata": {"labels": ["project-mode"], "state": "open"},
+    }]
+    items = normalize.normalize_source_items("github", raw, *window)
+    assert len(items) == 2  # the date filter still keeps the snapshot
+    ranked = signals.annotate_stream(items, "ghostty", "balanced_recent", reference_date=window[1])
+    by_id = {item.item_id: item for item in ranked}
+    snapshot, mid = by_id["GH1"], by_id["GH9"]
+    assert snapshot.local_relevance == mid.local_relevance
+    assert snapshot.freshness == 50
+    assert snapshot.freshness <= mid.freshness  # mid-window scores the 50 midpoint
+    assert snapshot.local_rank_score <= mid.local_rank_score + 0.10  # engagement only
+
+
+def test_in_window_release_keeps_normal_freshness():
+    from lib import normalize, signals
+
+    window = ("2026-09-11", "2026-10-11")
+    items = normalize.normalize_source_items("github", _project_mode_items("2026-10-09"), *window)
+    item = signals.annotate_stream(items, "ghostty", "balanced_recent", reference_date=window[1])[0]
+    assert item.published_at == "2026-10-09"
+    assert item.freshness > 80

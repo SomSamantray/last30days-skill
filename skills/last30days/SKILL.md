@@ -1,6 +1,6 @@
 ---
 name: last30days
-version: "3.27.2"
+version: "3.28.1"
 description: "Research what people actually say about any topic in the last 30 days. Pulls posts and engagement from Reddit, X, YouTube, TikTok, Hacker News, Polymarket, GitHub, and the web. Includes a doctor health check to diagnose broken or missing sources."
 argument-hint: 'last30days nvidia earnings reaction | last30days AI video tools | last30days what users want in react'
 allowed-tools: Bash, Read, Write, AskUserQuestion, WebSearch
@@ -49,6 +49,7 @@ metadata:
       - instagram
       - linkedin
       - hackernews
+      - devto
       - polymarket
       - digg
       - bluesky
@@ -69,7 +70,7 @@ metadata:
 ---
 
 
-# last30days v3.27.2: Research Any Topic from the Last 30 Days
+# last30days v3.28.1: Research Any Topic from the Last 30 Days
 
 ## Skill contract
 
@@ -172,7 +173,7 @@ GENERAL / NEWS / PROMPTING / RECOMMENDATIONS use `What I learned:` on line 3 and
 
 **LAW 4 - NO `##` or `###` SECTION HEADERS IN BODY (with COMPARISON exception).** Normal bodies use bold-lead-in paragraphs, the prose label `KEY PATTERNS from the research:`, and a numbered list. An engine-emitted `## Pre-Research Status` warning is allowed and must pass through verbatim. COMPARISON permits only its required `## Quick Verdict`, `## {Entity}` per entity, `## Head-to-Head`, `## The Bottom Line`, and `## The emerging stack` headers.
 
-**LAW 5 - ENGINE FOOTER PASS-THROUGH. EVERY QUERY TYPE. EVERY RUN.** Relay only the footer wrapped in `<!-- PASS-THROUGH FOOTER -->` / `<!-- END PASS-THROUGH FOOTER -->`, after the body/key patterns or comparison scaffold and before the invitation. Preserve the engine's `✅ All agents reported back!` emoji-tree block, statistics, and lines, subject to governing instructions. Required citations may appear separately. Relay a saved-file pointer only if emitted. Never invent a footer, saved path, source line, or replacement `## Notable Stats` block.
+**LAW 5 - ENGINE FOOTER PASS-THROUGH. EVERY QUERY TYPE. EVERY RUN.** Relay only the engine's fenced `text` footer block, fence included (it stops Markdown misreading `---`), after the body/key patterns or comparison scaffold and before the invitation. Preserve its `✅ All agents reported back!` emoji tree, statistics, and lines, subject to governing instructions. Required citations may appear separately. Relay a saved-file pointer only if emitted. Never invent a footer, saved path, source line, or replacement `## Notable Stats` block.
 
 **LAW 6 - NO RAW RANKED EVIDENCE CLUSTERS IN BODY.** The `<!-- EVIDENCE FOR SYNTHESIS -->` / `<!-- END EVIDENCE FOR SYNTHESIS -->` region, including `## Ranked Evidence Clusters`, `## Stats`, and `## Source Coverage`, is scratch evidence to transform into the selected prose template. Never emit raw score tuples or uncertainty rows. If the draft contains `### 1.` followed by `(score N, M items, sources: ...)`, `- Uncertainty: single-source`, or `- Uncertainty: thin-evidence`, stop and regenerate.
 
@@ -206,7 +207,7 @@ Write plans to a temporary file using `mktemp` with trailing `XXXXXX`, a cleanup
 Check governing formatting/citation instructions first. Skip a conflicting presentation default. If data supports a correction, regenerate at most once; if the data is absent, skip that check silently.
 
 1. Normal narrative paragraphs start `**Headline phrase** -`; no invented title, forbidden section headers, or unquoted em/en dashes. Comparison and audience-register exceptions follow their selected templates.
-2. Relay the emitted footer exactly, including every active nonzero source's emoji/count/engagement lines. Add no zero-result source, outcome/⚠ text, or saved path.
+2. Relay the emitted fenced footer exactly, including every active nonzero source's emoji/count/engagement lines. Add no zero-result source, outcome/⚠ text, or saved path.
 3. Weave at least two actual attributed comments when qualifying evidence exists. The GENERAL nothing-solid floor overrides rejected comments. Run LAW 8's citation check separately; never reconstruct URLs.
 4. Remove tooling meta-commentary. Keep claims grounded in the actual output and resolved entity.
 5. If Polymarket returned markets, include specific percentages and directional movement; do not substitute dollar volume for odds.
@@ -232,6 +233,7 @@ After the response and required citations, stop and wait unless governing instru
 - Sends search queries to X/Twitter via the official X API v2 (`api.x.com`, app-only bearer from `X_BEARER_TOKEN`, sent only in the Authorization header; the engine's default X path on a Grok Bot host next to xAI's API), optional user-provided `AUTH_TOKEN`/`CT0` env vars, explicit browser-cookie opt-in (`FROM_BROWSER` or setup consent), xAI's API (`api.x.ai` by default), Xquik's API (`xquik.com` by default), or the official X API v2 via xurl CLI (OAuth2, auto-detected when installed and authenticated)
 - Accepts a host-provided `--x-posts` envelope (a `.json` file of posts the hosting model fetched through its own X connector) as untrusted input: it replaces the engine's X fetch for that run, every row is validated and its citation URL rebuilt from the post id, and no X backend is called
 - Sends search queries to Algolia HN Search API (`hn.algolia.com`) for Hacker News story and comment discovery (free, no auth)
+- dev.to API only on `--devto-tags`/`INCLUDE_SOURCES=devto`
 - Sends search queries to Polymarket Gamma API (`gamma-api.polymarket.com`) for prediction market discovery (free, no auth)
 - Runs `yt-dlp` locally for YouTube search and transcript extraction (no API key, public data)
 - Sends TikTok/Instagram search, YouTube search backfill below the configured floor (default 3; `LAST30DAYS_YT_SC_MIN_ITEMS=0` means empty-only), and transcripts to ScrapeCreators (`api.scrapecreators.com`); keyed calls spend credits (10,000 free, then PAYG).

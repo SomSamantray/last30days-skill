@@ -210,8 +210,11 @@ def test_default_register_is_byte_identical_when_omitted(monkeypatch):
         # comment-rendering changes, the quiet footer (no outcome text, no
         # ## Source Errors in compact), and the comments pool reading every
         # floor-clearing cluster, and the canonical boundary's inline-citation
-        # wording (no tool-contract override claim).
-        "86e7903a3f4e401025681126ed6f932d65c3a752444f0cbd2e89fb83e7e7a414"
+        # wording (no tool-contract override claim), and HN cluster-evidence
+        # comment lines carrying the comment's own link, and #706's fenced
+        # text footer, and #1082's removal of LAW N framing from model-visible
+        # contract text.
+        "7f59fe51a42de2983cc5ef863c03090f7c73d2a2e5adcea236883f14fe550ef5"
     )
 
 
