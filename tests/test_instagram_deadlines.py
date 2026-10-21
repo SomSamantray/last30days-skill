@@ -76,7 +76,7 @@ def test_stream_retains_completed_detail_before_its_deadline(monkeypatch):
             assert not pending, "Instagram must return its recovered reels before the stream expires"
             items, artifact = future.result()
             assert [item["video_id"] for item in items] == ["FAST"]
-            assert artifact["_source_outcome"]["state"] in {health.TIMEOUT, health.PARTIAL}
+            assert artifact["_source_outcome"]["state"] == health.PARTIAL
             assert "timed out" in artifact["_source_outcome"]["detail"]
             assert len(requests) == 4
             assert all(0 < timeout < 1 for _, timeout in requests)
